@@ -26,7 +26,7 @@ public class BasicExample {
         IoUringFile f = IoUringFile.open(
             path,
             ioEventLoop,
-            new StandardOpenOption[]{
+            new StandardOpenOption[] {
                 StandardOpenOption.READ,
                 StandardOpenOption.WRITE,
                 StandardOpenOption.CREATE,

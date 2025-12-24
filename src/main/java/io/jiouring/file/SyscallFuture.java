@@ -20,7 +20,11 @@ public class SyscallFuture {
     private int result = 0;
     private Throwable exception = null;
 
-    // NOTE: The order of the resets matters
+    /**
+     * Resets the future for reuse in a pool.
+     * NOTE: This is not thread-safe and must be called by the owning thread
+     * only when the future is known to be free.
+     */
     void reset(byte op) {
         this.op = op;
         this.result = 0;
@@ -31,57 +35,104 @@ public class SyscallFuture {
     }
 
     public void onComplete(BiConsumer<Integer, Throwable> handler) {
-        if (this.done) {
-            handler.accept(this.result, this.exception);
-        } else {
-            if (this.completionHandler != null) {
-                throw new IllegalStateException("SyscallFuture can only register one completionHandler");
+        boolean runImmediately = false;
+
+        synchronized (this) {
+            if (this.done) {
+                runImmediately = true;
+            } else {
+                if (this.completionHandler != null) {
+                    throw new IllegalStateException("SyscallFuture can only register one completionHandler");
+                }
+                this.completionHandler = handler;
             }
-            this.completionHandler = handler;
+        }
+
+        if (runImmediately) {
+            invokeHandler(handler, this.result, this.exception);
         }
     }
 
-    void complete(int res) {
-        if (this.done) {
-            throw new IllegalStateException("Future is already completed");
+    public void complete(int res) {
+        BiConsumer<Integer, Throwable> handlerToRun;
+        Thread waiterToUnpark;
+        Throwable computedException = null;
+
+        if (res < 0) {
+            try {
+                computedException = Errors.newIOException("op: " + op, res);
+            } catch (Throwable t) {
+                computedException = new IOException(
+                    "Operation failed with res: " + res
+                        + " (and failed to construct detailed error: "
+                        + t.getMessage() + ")"
+                );
+            }
         }
 
-        this.result = res;
-        if (res < 0) {
-            this.exception = Errors.newIOException("op: " + op, res);
+        synchronized (this) {
+            if (this.done) {
+                throw new IllegalStateException("Future is already completed");
+            }
+            this.done = true;
+            this.result = res;
+            this.exception = computedException;
+
+            handlerToRun = this.completionHandler;
+            waiterToUnpark = this.waiter;
         }
-        finish();
+
+        if (handlerToRun != null) {
+            invokeHandler(handlerToRun, this.result, this.exception);
+        }
+
+        if (waiterToUnpark != null) {
+            LockSupport.unpark(waiterToUnpark);
+        }
     }
 
     void fail(Throwable cause) {
-        if (this.done) {
-            throw new IllegalStateException("Future is already completed");
+        BiConsumer<Integer, Throwable> handlerToRun;
+        Thread waiterToUnpark;
+
+        synchronized (this) {
+            if (this.done) {
+                throw new IllegalStateException("Future is already completed");
+            }
+            this.done = true;
+            this.result = -1;
+            this.exception = cause;
+
+            handlerToRun = this.completionHandler;
+            waiterToUnpark = this.waiter;
         }
 
-        this.exception = cause;
-        this.result = -1;
-        finish();
+        if (handlerToRun != null) {
+            invokeHandler(handlerToRun, this.result, this.exception);
+        }
+
+        if (waiterToUnpark != null) {
+            LockSupport.unpark(waiterToUnpark);
+        }
     }
 
-    private void finish() {
-        this.done = true;
+    private void invokeHandler(BiConsumer<Integer, Throwable> handler, int res, Throwable ex) {
         try {
-            if (this.completionHandler != null) {
-                this.completionHandler.accept(this.result, this.exception);
-            }
+            handler.accept(res, ex);
         } catch (Throwable t) {
-            logger.fatal("User callback crashed due to an exception; this should never happen", t);
+            logger.error("User callback crashed", t);
         }
-
-        Thread w = this.waiter;
-        if (w != null) LockSupport.unpark(w);
     }
 
     public int join() throws IOException {
         if (this.done) return report();
 
         this.waiter = Thread.currentThread();
-        while (!this.done) LockSupport.park(this);
+
+        while (!this.done) {
+            LockSupport.park(this);
+        }
+
         return report();
     }
 
@@ -90,15 +141,11 @@ public class SyscallFuture {
             if (this.exception instanceof IOException ioException) {
                 throw ioException;
             }
-
             if (this.exception instanceof RuntimeException runtimeException) {
                 throw runtimeException;
             }
-
-            // Wrap unknown throwables
             throw new IOException(this.exception);
         }
-
         return this.result;
     }
 }

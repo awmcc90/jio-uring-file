@@ -110,9 +110,17 @@ public class IoUringFileIoHandle implements IoUringIoHandle {
     }
 
     private SyscallFuture internalSubmit(AsyncOpContext ctx, Function<AsyncOpContext, IoUringIoOps> opFactory) {
-        if (isClosed()) {
+        if (state == State.CLOSED) {
             contextRegistry.release(ctx, new IOException("Handle is closed"));
             return ctx.future;
+        }
+
+        byte op = ctx.op;
+
+        if (state == State.CLOSING && !(op == NativeConstants.IoRingOp.CLOSE || op == NativeConstants.IoRingOp.ASYNC_CANCEL)) {
+            SyscallFuture f = new SyscallFuture();
+            f.fail(new IOException("Handle is closing"));
+            return f;
         }
 
         if (!ioRegistration.isValid()) {
@@ -134,9 +142,15 @@ public class IoUringFileIoHandle implements IoUringIoHandle {
 
     private SyscallFuture submitOnLoop(byte opCode, Function<AsyncOpContext, IoUringIoOps> opFactory) {
         if (ioEventLoop.inEventLoop()) {
-            if (isClosed()) {
+            if (state == State.CLOSED) {
                 SyscallFuture f = new SyscallFuture();
                 f.fail(new IOException("Handle is closed"));
+                return f;
+            }
+
+            if (state == State.CLOSING && !(opCode == NativeConstants.IoRingOp.CLOSE || opCode == NativeConstants.IoRingOp.ASYNC_CANCEL)) {
+                SyscallFuture f = new SyscallFuture();
+                f.fail(new IOException("Handle is closing"));
                 return f;
             }
 
@@ -197,6 +211,8 @@ public class IoUringFileIoHandle implements IoUringIoHandle {
             f.onComplete((res, err) -> {
                 if (err != null) {
                     state = State.INITIALIZED;
+                    logger.warn("Failed to initialize. Cancelling ioRegistration.");
+                    ioRegistration.cancel();
                     proxy.completeExceptionally(err);
                 } else {
                     fd = res;
@@ -462,8 +478,11 @@ public class IoUringFileIoHandle implements IoUringIoHandle {
                     .open(pathCStr)
                     .whenComplete((res, err) -> {
                         pathCStr.release();
-                        if (err != null) future.completeExceptionally(err);
-                        else future.complete(res);
+                        if (err != null) {
+                            future.completeExceptionally(err);
+                        } else {
+                            future.complete(res);
+                        }
                     });
             } catch (Throwable t) {
                 pathCStr.release();

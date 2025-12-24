@@ -74,9 +74,9 @@ public class AsyncOpRegistry implements Iterable<AsyncOpContext> {
             AsyncOpContext ctx = contextPool[index];
 
             if (ctx.inUse) {
+                ctx.future.complete(event.res());
                 ctx.inUse = false;
                 ctx.uringId = -1;
-                ctx.future.complete(event.res());
 
                 // Push back to free stack
                 freeIndices[++freeTop] = index;
