@@ -2,7 +2,6 @@ package io.jiouring.file;
 
 import com.sun.nio.file.ExtendedOpenOption;
 import io.netty.buffer.ByteBuf;
-import io.netty.buffer.Unpooled;
 
 import java.nio.charset.StandardCharsets;
 import java.nio.file.LinkOption;
@@ -13,7 +12,7 @@ import java.nio.file.attribute.FileAttribute;
 import java.nio.file.attribute.PosixFilePermission;
 import java.util.Set;
 
-public class OpenHelpers {
+public final class OpenHelpers {
 
     private OpenHelpers() {}
 
@@ -21,7 +20,7 @@ public class OpenHelpers {
         String absPath = path.toAbsolutePath().toString();
         byte[] bytes = absPath.getBytes(StandardCharsets.UTF_8);
 
-        ByteBuf buf = Unpooled.directBuffer(bytes.length + 1);
+        ByteBuf buf = Buffers.direct(bytes.length + 1);
         buf.writeBytes(bytes);
         buf.writeByte(0); // Null terminator
         return buf;

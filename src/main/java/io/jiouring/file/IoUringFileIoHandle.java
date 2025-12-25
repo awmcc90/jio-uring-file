@@ -21,7 +21,6 @@ import java.nio.file.attribute.FileAttribute;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 
@@ -38,10 +37,10 @@ public class IoUringFileIoHandle implements IoUringIoHandle {
     private final AsyncOpRegistry contextRegistry = new AsyncOpRegistry();
 
     private State state = State.INITIALIZING;
-
     private boolean closeSubmitted = false;
+
     private final AtomicReference<CompletableFuture<Integer>> closeFuture = new AtomicReference<>(null);
-    private CompletableFuture<IoUringFileIoHandle> openFuture = null;
+    private final AtomicReference<CompletableFuture<IoUringFileIoHandle>> openFuture = new AtomicReference<>(null);
 
     private IoRegistration ioRegistration;
     private int fd = -1;
@@ -49,7 +48,7 @@ public class IoUringFileIoHandle implements IoUringIoHandle {
     public final boolean isAnonymous;
     public final boolean isDirectory;
 
-    private ScheduledFuture<?> stuckOpsCleanerTask;
+    private final ScheduledFuture<?> stuckOpsCleanerTask;
 
     private IoUringFileIoHandle(Path path, IoEventLoop ioEventLoop, int flags, int mode) {
         this.path = path;
@@ -77,156 +76,113 @@ public class IoUringFileIoHandle implements IoUringIoHandle {
         return this;
     }
 
-    private boolean isClosed() {
-        return state == State.CLOSING || state == State.CLOSED;
-    }
-
     private void checkStuckOps() {
         List<AsyncOpContext> stuckOps = contextRegistry.findStuckOps(OP_TIMEOUT_NS);
-
-        if (stuckOps.isEmpty()) return;
+        if (stuckOps.isEmpty()) {
+            return;
+        }
 
         logger.warn("Found {} stuck operations. Attempting cleanup.", stuckOps.size());
 
         for (AsyncOpContext ctx : stuckOps) {
-            if (ctx.uringId == -1L) {
-                // Never submitted to kernel
-                logger.warn("Force releasing unsubmitted op: {}", ctx.id);
-                contextRegistry.release(ctx, new TimeoutException("Op never submitted"));
-            } else {
-                // Kernel has it
-                logger.warn("Attempting to cancel stuck op: {}", ctx.id);
-                submitCancel(ctx.id);
-            }
+            logger.warn("Attempting to cancel stuck op: {}", ctx);
+            cancelAsync(ctx.uringId);
         }
     }
 
-    private void withEventLoop(Runnable block) {
-        if (ioEventLoop.inEventLoop()) {
-            block.run();
-        } else {
-            ioEventLoop.execute(block);
-        }
-    }
-
-    private SyscallFuture internalSubmit(AsyncOpContext ctx, Function<AsyncOpContext, IoUringIoOps> opFactory) {
-        if (state == State.CLOSED) {
-            contextRegistry.release(ctx, new IOException("Handle is closed"));
-            return ctx.future;
-        }
-
-        byte op = ctx.op;
-
-        if (state == State.CLOSING && !(op == NativeConstants.IoRingOp.CLOSE || op == NativeConstants.IoRingOp.ASYNC_CANCEL)) {
-            SyscallFuture f = new SyscallFuture();
-            f.fail(new IOException("Handle is closing"));
-            return f;
+    private SyscallFuture submit(byte op, Function<AsyncOpContext, IoUringIoOps> factory) {
+        if (!ioEventLoop.inEventLoop()) {
+            SyscallFuture proxy = new SyscallFuture();
+            ioEventLoop.execute(() -> AsyncUtils.completeFrom(proxy, submit(op, factory)));
+            return proxy;
         }
 
         if (!ioRegistration.isValid()) {
-            contextRegistry.release(ctx, new IllegalStateException("Registration is invalid"));
-            return ctx.future;
+            return SyscallFuture.failed(
+                new IllegalStateException("Registration is invalid")
+            );
         }
 
+        if (state == State.CLOSED) {
+            return SyscallFuture.failed(
+                new IOException("Handle is closed")
+            );
+        }
+
+        if (state == State.CLOSING && !(op == NativeConstants.IoRingOp.CLOSE || op == NativeConstants.IoRingOp.ASYNC_CANCEL)) {
+            return SyscallFuture.failed(
+                new IOException("Handle is closing")
+            );
+        }
+
+        if (contextRegistry.isFull()) {
+            return SyscallFuture.failed(
+                new IllegalStateException("Context registry is full")
+            );
+        }
+
+        AsyncOpContext ctx = null;
         try {
-            ctx.uringId = ioRegistration.submit(opFactory.apply(ctx));
-            if (ctx.uringId == -1L) {
-                contextRegistry.release(ctx, new IOException("io_uring submission failed (ring full?)"));
-            }
+            ctx = contextRegistry.next(op);
+            ctx.uringId = ioRegistration.submit(factory.apply(ctx));
+            if (ctx.uringId == -1L) throw new IOException("io_uring submission failed (ring full?)");
+            return ctx.future;
         } catch (Throwable t) {
-            contextRegistry.release(ctx, t);
+            if (ctx != null) contextRegistry.release(ctx, t);
+            return SyscallFuture.failed(t);
         }
-
-        return ctx.future;
     }
 
-    private SyscallFuture submitOnLoop(byte opCode, Function<AsyncOpContext, IoUringIoOps> opFactory) {
-        if (ioEventLoop.inEventLoop()) {
-            if (state == State.CLOSED) {
-                SyscallFuture f = new SyscallFuture();
-                f.fail(new IOException("Handle is closed"));
-                return f;
-            }
-
-            if (state == State.CLOSING && !(opCode == NativeConstants.IoRingOp.CLOSE || opCode == NativeConstants.IoRingOp.ASYNC_CANCEL)) {
-                SyscallFuture f = new SyscallFuture();
-                f.fail(new IOException("Handle is closing"));
-                return f;
-            }
-
-            if (contextRegistry.isFull()) {
-                SyscallFuture f = new SyscallFuture();
-                f.fail(new IllegalStateException("Context registry is full"));
-                return f;
-            }
-
-            AsyncOpContext ctx = contextRegistry.next(opCode);
-            return internalSubmit(ctx, opFactory);
+    private SyscallFuture safeSubmit(byte op, Function<AsyncOpContext, IoUringIoOps> factory) {
+        try {
+            return submit(op, factory);
+        } catch (Throwable t) {
+            return SyscallFuture.failed(t);
         }
-
-        SyscallFuture proxy = new SyscallFuture();
-        ioEventLoop.execute(() -> {
-            try {
-                if (isClosed()) {
-                    proxy.fail(new IOException("Handle is closed"));
-                    return;
-                }
-
-                AsyncOpContext ctx = contextRegistry.next(opCode);
-                internalSubmit(ctx, opFactory)
-                    .onComplete((res, err) -> {
-                        if (err != null) proxy.fail(err);
-                        else proxy.complete(res);
-                    });
-            } catch (Throwable t) {
-                proxy.fail(t);
-            }
-        });
-
-        return proxy;
     }
 
     private CompletableFuture<IoUringFileIoHandle> open(ByteBuf pathCStr) {
-        if (openFuture != null) return openFuture;
+        CompletableFuture<IoUringFileIoHandle> current = openFuture.get();
+        if (current != null) {
+            return current;
+        }
 
-        CompletableFuture<IoUringFileIoHandle> proxy = new CompletableFuture<>();
-        openFuture = proxy;
+        CompletableFuture<IoUringFileIoHandle> promise = new CompletableFuture<>();
+        if ((current = openFuture.compareAndExchange(null, promise)) != null) {
+            return current;
+        }
 
-        withEventLoop(() -> {
-            if (isClosed()) {
-                proxy.completeExceptionally(new IOException("IoUringFileIoHandle is " + state + " (op=open)"));
-                return;
+        state = State.OPENING;
+
+        SyscallFuture f = safeSubmit(NativeConstants.IoRingOp.OPENAT, ctx ->
+            new IoUringIoOps(
+                ctx.op, (byte) 0, (byte) 0, -1,
+                0L, pathCStr.memoryAddress(), mode, flags,
+                ctx.id, (short) 0, (short) 0, 0, 0L
+            )
+        );
+
+        f.onComplete((res, err) -> {
+            if (err != null) {
+                state = State.FAILED;
+                logger.warn("Failed to initialize. Cleaning up...");
+
+                // We only have to cancel the registration. There can't be any other ops in flight right now
+                // because the openFuture hasn't completed.
+                ioRegistration.cancel();
+                promise.completeExceptionally(err);
+            } else {
+                fd = res;
+                state = State.OPEN;
+                promise.complete(this);
             }
-
-            state = State.OPENING;
-
-            SyscallFuture f = submitOnLoop(NativeConstants.IoRingOp.OPENAT, ctx ->
-                new IoUringIoOps(
-                    ctx.op, (byte) 0, (byte) 0, -1,
-                    0L, pathCStr.memoryAddress(), mode, flags,
-                    ctx.id, (short) 0, (short) 0, 0, 0L
-                )
-            );
-
-            f.onComplete((res, err) -> {
-                if (err != null) {
-                    state = State.INITIALIZED;
-                    logger.warn("Failed to initialize. Cancelling ioRegistration.");
-                    ioRegistration.cancel();
-                    proxy.completeExceptionally(err);
-                } else {
-                    fd = res;
-                    state = State.OPEN;
-                    proxy.complete(this);
-                }
-            });
         });
 
-        return proxy;
+        return promise;
     }
 
     public SyscallFuture fallocateAsync(long offset, long length, int mode) {
-        return submitOnLoop(NativeConstants.IoRingOp.FALLOCATE, ctx ->
+        return safeSubmit(NativeConstants.IoRingOp.FALLOCATE, ctx ->
             new IoUringIoOps(
                 ctx.op, (byte) 0, (byte) 0, fd,
                 offset, length, mode, 0,
@@ -236,7 +192,7 @@ public class IoUringFileIoHandle implements IoUringIoHandle {
     }
 
     public SyscallFuture writeAsync(ByteBuf buffer, long offset, boolean dsync) {
-        return submitOnLoop(NativeConstants.IoRingOp.WRITE, ctx ->
+        return safeSubmit(NativeConstants.IoRingOp.WRITE, ctx ->
             new IoUringIoOps(
                 ctx.op, (byte) 0, (byte) 0, fd,
                 offset, buffer.memoryAddress(), buffer.readableBytes(),
@@ -247,7 +203,7 @@ public class IoUringFileIoHandle implements IoUringIoHandle {
     }
 
     public SyscallFuture readAsync(ByteBuf buffer, long offset) {
-        return submitOnLoop(NativeConstants.IoRingOp.READ, ctx ->
+        return safeSubmit(NativeConstants.IoRingOp.READ, ctx ->
             new IoUringIoOps(
                 ctx.op, (byte) 0, (byte) 0, fd,
                 offset, buffer.memoryAddress(), buffer.writableBytes(), 0,
@@ -257,7 +213,7 @@ public class IoUringFileIoHandle implements IoUringIoHandle {
     }
 
     public SyscallFuture readvAsync(IovArray iovArray, long offset) {
-        return submitOnLoop(NativeConstants.IoRingOp.READV, ctx ->
+        return safeSubmit(NativeConstants.IoRingOp.READV, ctx ->
             new IoUringIoOps(
                 ctx.op, (byte) 0, (byte) 0, fd,
                 offset, iovArray.memoryAddress(0), iovArray.count(), 0,
@@ -267,7 +223,7 @@ public class IoUringFileIoHandle implements IoUringIoHandle {
     }
 
     public SyscallFuture writevAsync(IovArray iovArray, long offset) {
-        return submitOnLoop(NativeConstants.IoRingOp.WRITEV, ctx ->
+        return safeSubmit(NativeConstants.IoRingOp.WRITEV, ctx ->
             new IoUringIoOps(
                 ctx.op, (byte) 0, (byte) 0, fd,
                 offset, iovArray.memoryAddress(0), iovArray.count(), 0,
@@ -278,7 +234,7 @@ public class IoUringFileIoHandle implements IoUringIoHandle {
 
     // It goes in the offset slot; that's not a mistake
     public SyscallFuture truncateAsync(long length) {
-        return submitOnLoop(NativeConstants.IoRingOp.FTRUNCATE, ctx ->
+        return safeSubmit(NativeConstants.IoRingOp.FTRUNCATE, ctx ->
             new IoUringIoOps(
                 ctx.op, (byte) 0, (byte) 0, fd,
                 length, 0L, 0, 0,
@@ -288,7 +244,7 @@ public class IoUringFileIoHandle implements IoUringIoHandle {
     }
 
     public SyscallFuture fsyncAsync(boolean isSyncData, int len, long offset) {
-        return submitOnLoop(NativeConstants.IoRingOp.FSYNC, ctx ->
+        return safeSubmit(NativeConstants.IoRingOp.FSYNC, ctx ->
             new IoUringIoOps(
                 ctx.op, (byte) 0, (byte) 0, fd,
                 offset, 0L, len,
@@ -299,10 +255,8 @@ public class IoUringFileIoHandle implements IoUringIoHandle {
     }
 
     public SyscallFuture unlinkAsync() {
-        SyscallFuture proxy = new SyscallFuture();
         ByteBuf pathCStr = OpenHelpers.cStr(path);
-
-        SyscallFuture f = submitOnLoop(NativeConstants.IoRingOp.UNLINKAT, ctx ->
+        SyscallFuture f = safeSubmit(NativeConstants.IoRingOp.UNLINKAT, ctx ->
             new IoUringIoOps(
                 ctx.op, (byte) 0, (byte) 0, -1,
                 0L, pathCStr.memoryAddress(), 0,
@@ -311,6 +265,7 @@ public class IoUringFileIoHandle implements IoUringIoHandle {
             )
         );
 
+        SyscallFuture proxy = new SyscallFuture();
         f.onComplete((res, err) -> {
             pathCStr.release();
             if (err != null) proxy.fail(err);
@@ -321,23 +276,27 @@ public class IoUringFileIoHandle implements IoUringIoHandle {
     }
 
     public SyscallFuture statxAsync(int mask, int flags, ByteBuf statxBuffer) {
-        return submitOnLoop(NativeConstants.IoRingOp.STATX, ctx ->
+        ByteBuf pathCStr = OpenHelpers.cStr(path);
+        SyscallFuture f = safeSubmit(NativeConstants.IoRingOp.STATX, ctx ->
             new IoUringIoOps(
-                ctx.op, (byte) 0, (byte) 0, fd,
-                statxBuffer.memoryAddress(), 0L, mask,
-                NativeConstants.AtFlags.AT_EMPTY_PATH | flags,
+                ctx.op, (byte) 0, (byte) 0, NativeConstants.AtFlags.AT_FDCWD,
+                statxBuffer.memoryAddress(), pathCStr.memoryAddress(), mask, flags,
                 ctx.id, (short) 0, (short) 0, 0, 0L
             )
         );
+
+        SyscallFuture proxy = new SyscallFuture();
+        f.onComplete((res, err) -> {
+            pathCStr.release();
+            if (err != null) proxy.fail(err);
+            else proxy.complete(res);
+        });
+
+        return proxy;
     }
 
-    private void submitCancel(long uringId) {
-        if (contextRegistry.isFull()) {
-            logger.warn("Registry full; cannot submit cancellation for {}", uringId);
-            return;
-        }
-
-        submitOnLoop(NativeConstants.IoRingOp.ASYNC_CANCEL, ctx ->
+    private void cancelAsync(long uringId) {
+        safeSubmit(NativeConstants.IoRingOp.ASYNC_CANCEL, ctx ->
             new IoUringIoOps(
                 ctx.op, (byte) 0, (byte) 0, -1,
                 0L, uringId, 0, 0,
@@ -346,17 +305,9 @@ public class IoUringFileIoHandle implements IoUringIoHandle {
         );
     }
 
-    private void submitCancelAll() {
-        if (contextRegistry.isEmpty()) {
-            return;
-        }
-
-        if (contextRegistry.isFull()) {
-            logger.warn("Registry full; cannot submit cancel all operation");
-            return;
-        }
-
-        submitOnLoop(NativeConstants.IoRingOp.ASYNC_CANCEL, ctx ->
+    private SyscallFuture submitCancelAll() {
+        if (contextRegistry.isEmpty()) return SyscallFuture.completed(0);
+        return safeSubmit(NativeConstants.IoRingOp.ASYNC_CANCEL, ctx ->
             new IoUringIoOps(
                 ctx.op, (byte) 0, (byte) 0, fd,
                 0L, 0L, 0,
@@ -366,84 +317,74 @@ public class IoUringFileIoHandle implements IoUringIoHandle {
         );
     }
 
-    private void submitCloseIfReady() {
-        if (state != State.CLOSING || !contextRegistry.isEmpty() || closeSubmitted) return;
-
-        IoUringIoOps ops = new IoUringIoOps(
-            NativeConstants.IoRingOp.CLOSE, (byte) 0, (short) 0, fd,
-            0L, 0L, 0, 0,
-            Short.MAX_VALUE, (short) 0, (short) 0, 0, 0L
-        );
-
-        try {
-            long uringId = ioRegistration.submit(ops);
-            if (uringId == -1L) throw new IOException("Failed to submit close");
-            closeSubmitted = true;
-        } catch (Throwable t) {
-            CompletableFuture<Integer> f = closeFuture.get();
-            if (f != null) f.completeExceptionally(t);
-            state = State.CLOSED;
+    private void maybeSubmitClose() {
+        if (state != State.CLOSING || !contextRegistry.isEmpty() || closeSubmitted) {
+            return;
         }
 
-        ioRegistration.cancel();
+        SyscallFuture f = safeSubmit(NativeConstants.IoRingOp.CLOSE, ctx ->
+            new IoUringIoOps(
+                ctx.op, (byte) 0, (byte) 0, fd,
+                0L, 0L, 0, 0,
+                ctx.id, (short) 0, (short) 0, 0, 0L
+            )
+        );
+
+        f.onComplete((res, err) -> {
+            state = State.CLOSED;
+            ioRegistration.cancel();
+
+            // This can't be null if state == CLOSING
+            CompletableFuture<Integer> _closeFuture = closeFuture.get();
+            if (err != null) _closeFuture.completeExceptionally(err);
+            else _closeFuture.complete(res);
+        });
+
+        closeSubmitted = true;
     }
 
     @Override
     public void handle(IoRegistration ioRegistration, IoEvent ioEvent) {
         IoUringIoEvent event = (IoUringIoEvent) ioEvent;
-
-        // Special case for CLOSE
-        if (event.data() == Short.MAX_VALUE && event.opcode() == NativeConstants.IoRingOp.CLOSE) {
-            int res = event.res();
-            CompletableFuture<Integer> f = closeFuture.get();
-
-            if (f == null) {
-                logger.error("Received close event completion but close future isn't set. This should not happen.");
-                return;
-            }
-
-            if (res < 0) f.completeExceptionally(new IOException("Close failed: " + res));
-            else f.complete(res);
-
-            return;
-        }
-
         contextRegistry.complete(event);
-        submitCloseIfReady();
+        maybeSubmitClose();
     }
 
     public CompletableFuture<Integer> closeAsync() {
-        if (closeFuture.get() != null) return closeFuture.get();
-
-        CompletableFuture<Integer> promise = new CompletableFuture<>();
-        if (closeFuture.compareAndSet(null, promise)) {
-            withEventLoop(() -> {
-                if (stuckOpsCleanerTask != null) {
-                    stuckOpsCleanerTask.cancel(false);
-                    stuckOpsCleanerTask = null;
-                }
-
-                if (state != State.CLOSING && state != State.CLOSED) {
-                    state = State.CLOSING;
-                    if (ioRegistration != null && ioRegistration.isValid()) {
-                        submitCancelAll();
-                        submitCloseIfReady();
-                    } else {
-                        state = State.CLOSED;
-                        promise.complete(0);
-                    }
-                } else {
-                    promise.complete(0);
-                }
-            });
-            return promise;
+        if (state == State.FAILED || state == State.CLOSED) {
+            logger.warn("Close called on handle in state {}", state);
+            return CompletableFuture.completedFuture(0);
         }
 
-        return closeFuture.get();
+        CompletableFuture<Integer> current = closeFuture.get();
+        if (current != null) {
+            return current;
+        }
+
+        CompletableFuture<Integer> promise = new CompletableFuture<>();
+        if ((current = closeFuture.compareAndExchange(null, promise)) != null) {
+            return current;
+        }
+
+        // We won; set the state to CLOSING
+        state = State.CLOSING;
+
+        Runnable closeRunnable = () -> {
+            if (!stuckOpsCleanerTask.isDone()) stuckOpsCleanerTask.cancel(false);
+            stuckOpsCleanerTask
+                .addListener( f -> submitCancelAll()
+                    .onComplete((res, err) ->
+                        maybeSubmitClose()));
+        };
+
+        if (ioEventLoop.inEventLoop()) closeRunnable.run();
+        else ioEventLoop.execute(closeRunnable);
+
+        return promise;
     }
 
     @Override
-    public void close() throws Exception {
+    public void close() {
         closeAsync().join();
     }
 
@@ -453,7 +394,8 @@ public class IoUringFileIoHandle implements IoUringIoHandle {
         OPENING,
         OPEN,
         CLOSING,
-        CLOSED
+        CLOSED,
+        FAILED
     }
 
     public static CompletableFuture<IoUringFileIoHandle> open(
@@ -465,30 +407,30 @@ public class IoUringFileIoHandle implements IoUringIoHandle {
         CompletableFuture<IoUringFileIoHandle> future = new CompletableFuture<>();
         IoUringFileIoHandle handle = new IoUringFileIoHandle(path, ioEventLoop, flags, mode);
 
-        ioEventLoop.register(handle).addListener(f -> {
-            if (!f.isSuccess()) {
-                future.completeExceptionally(f.cause());
-                return;
-            }
+        ioEventLoop
+            .register(handle)
+            .addListener(f -> {
+                if (!f.isSuccess()) {
+                    future.completeExceptionally(f.cause());
+                    return;
+                }
 
-            ByteBuf pathCStr = OpenHelpers.cStr(path);
-            try {
-                IoRegistration reg = (IoRegistration) f.get();
-                handle.init(reg)
-                    .open(pathCStr)
-                    .whenComplete((res, err) -> {
-                        pathCStr.release();
-                        if (err != null) {
-                            future.completeExceptionally(err);
-                        } else {
-                            future.complete(res);
-                        }
-                    });
-            } catch (Throwable t) {
-                pathCStr.release();
-                future.completeExceptionally(t);
-            }
-        });
+                ByteBuf pathCStr = OpenHelpers.cStr(path);
+                try {
+                    IoRegistration reg = (IoRegistration) f.get();
+                    handle
+                        .init(reg)
+                        .open(pathCStr) // TODO: Should open retain the ByteBuf to avoid the double release logic?
+                        .whenComplete((res, err) -> {
+                            pathCStr.release();
+                            if (err != null) future.completeExceptionally(err);
+                            else future.complete(res);
+                        });
+                } catch (Throwable t) {
+                    pathCStr.release();
+                    future.completeExceptionally(t);
+                }
+            });
 
         return future;
     }

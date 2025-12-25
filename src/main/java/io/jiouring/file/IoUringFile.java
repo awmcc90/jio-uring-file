@@ -1,7 +1,6 @@
 package io.jiouring.file;
 
 import io.netty.buffer.ByteBuf;
-import io.netty.buffer.PooledByteBufAllocator;
 import io.netty.channel.IoEventLoop;
 import io.netty.channel.unix.IovArray;
 
@@ -33,7 +32,6 @@ public class IoUringFile implements AutoCloseable {
     public CompletableFuture<Integer> readAsync(ByteBuf byteBuf, long offset) {
         ensureBuffer(byteBuf, true);
         CompletableFuture<Integer> promise = new UncancellableFuture<>();
-
         ioUringIoHandle.readAsync(byteBuf.retain(), offset)
             .onComplete((res, err) -> {
                 try {
@@ -133,11 +131,11 @@ public class IoUringFile implements AutoCloseable {
         return promise;
     }
 
-    public CompletableFuture<Void> allocate(long offset, long length) {
+    public CompletableFuture<Integer> allocate(long offset, long length) {
         return fallocate(offset, length, 0);
     }
 
-    public CompletableFuture<Void> punchHole(long offset, long length) {
+    public CompletableFuture<Integer> punchHole(long offset, long length) {
         return fallocate(
             offset,
             length,
@@ -145,8 +143,8 @@ public class IoUringFile implements AutoCloseable {
         );
     }
 
-    public CompletableFuture<Void> fallocate(long offset, long length, int mode) {
-        CompletableFuture<Void> promise = new CompletableFuture<>();
+    public CompletableFuture<Integer> fallocate(long offset, long length, int mode) {
+        CompletableFuture<Integer> promise = new CompletableFuture<>();
         AsyncUtils.completeFrom(promise, ioUringIoHandle.fallocateAsync(offset, length, mode));
         return promise;
     }
@@ -193,7 +191,7 @@ public class IoUringFile implements AutoCloseable {
 
     private CompletableFuture<FileStats> stat(int mask, int flags) {
         CompletableFuture<FileStats> promise = new CompletableFuture<>();
-        ByteBuf statBuffer = PooledByteBufAllocator.DEFAULT.directBuffer(256);
+        ByteBuf statBuffer = Buffers.pooledDirect(256);
         ioUringIoHandle.statxAsync(mask, flags, statBuffer)
             .onComplete((res, err) -> {
                 try {
@@ -258,7 +256,7 @@ public class IoUringFile implements AutoCloseable {
     }
 
     @Override
-    public void close() throws Exception {
+    public void close() {
         ioUringIoHandle.close();
     }
 

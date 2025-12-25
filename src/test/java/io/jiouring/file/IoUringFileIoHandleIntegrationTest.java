@@ -1,8 +1,7 @@
 package io.jiouring.file;
 
+import io.jiouring.utils.RequiresKernel;
 import io.netty.buffer.ByteBuf;
-import io.netty.buffer.PooledByteBufAllocator;
-import io.netty.buffer.Unpooled;
 import io.netty.channel.IoEventLoop;
 import io.netty.channel.MultiThreadIoEventLoopGroup;
 import io.netty.channel.unix.IovArray;
@@ -67,14 +66,6 @@ class IoUringFileIoHandleIntegrationTest {
         return handle;
     }
 
-    private ByteBuf directBuffer(int size) {
-        return Unpooled.directBuffer(size);
-    }
-
-    private ByteBuf directBuffer(byte[] data) {
-        return Unpooled.directBuffer(data.length).writeBytes(data);
-    }
-
     @Test
     void openAndClose() throws Exception {
         handle = IoUringFileIoHandle.open(testPath, eventLoop, READ, WRITE, CREATE).get();
@@ -90,7 +81,7 @@ class IoUringFileIoHandleIntegrationTest {
         openHandle(READ, WRITE, CREATE, TRUNCATE_EXISTING);
 
         byte[] data = "syscall-future-test".getBytes(StandardCharsets.UTF_8);
-        ByteBuf buf = directBuffer(data);
+        ByteBuf buf = Buffers.direct(data);
 
         int written = handle.writeAsync(buf, 0, false).join();
         assertEquals(data.length, written);
@@ -103,10 +94,10 @@ class IoUringFileIoHandleIntegrationTest {
         openHandle(READ, WRITE, CREATE, TRUNCATE_EXISTING);
 
         byte[] data = "read-test".getBytes(StandardCharsets.UTF_8);
-        ByteBuf writeBuf = directBuffer(data);
+        ByteBuf writeBuf = Buffers.direct(data);
         handle.writeAsync(writeBuf, 0, false).join();
 
-        ByteBuf readBuf = directBuffer(data.length);
+        ByteBuf readBuf = Buffers.direct(data.length);
         int read = handle.readAsync(readBuf, 0).join();
         assertEquals(data.length, read);
 
@@ -119,7 +110,7 @@ class IoUringFileIoHandleIntegrationTest {
         openHandle(READ, WRITE, CREATE, TRUNCATE_EXISTING);
 
         byte[] data = "dsync-write".getBytes(StandardCharsets.UTF_8);
-        ByteBuf buf = directBuffer(data);
+        ByteBuf buf = Buffers.direct(data);
 
         int written = handle.writeAsync(buf, 0, true).join();
         assertEquals(data.length, written);
@@ -131,8 +122,8 @@ class IoUringFileIoHandleIntegrationTest {
     void writevAsync() throws Exception {
         openHandle(READ, WRITE, CREATE, TRUNCATE_EXISTING);
 
-        ByteBuf buf1 = directBuffer("AAA".getBytes(StandardCharsets.UTF_8));
-        ByteBuf buf2 = directBuffer("BBB".getBytes(StandardCharsets.UTF_8));
+        ByteBuf buf1 = Buffers.direct("AAA".getBytes(StandardCharsets.UTF_8));
+        ByteBuf buf2 = Buffers.direct("BBB".getBytes(StandardCharsets.UTF_8));
 
         IovArray iov = new IovArray(2);
         iov.add(buf1, buf1.readerIndex(), buf1.readableBytes());
@@ -151,11 +142,11 @@ class IoUringFileIoHandleIntegrationTest {
         openHandle(READ, WRITE, CREATE, TRUNCATE_EXISTING);
 
         byte[] data = "XXXYYY".getBytes(StandardCharsets.UTF_8);
-        ByteBuf writeBuf = directBuffer(data);
+        ByteBuf writeBuf = Buffers.direct(data);
         handle.writeAsync(writeBuf, 0, false).join();
 
-        ByteBuf buf1 = directBuffer(3);
-        ByteBuf buf2 = directBuffer(3);
+        ByteBuf buf1 = Buffers.direct(3);
+        ByteBuf buf2 = Buffers.direct(3);
 
         IovArray iov = new IovArray(2);
         iov.add(buf1, buf1.writerIndex(), buf1.writableBytes());
@@ -177,7 +168,7 @@ class IoUringFileIoHandleIntegrationTest {
         int result = handle.fallocateAsync(0, 4096, 0).join();
         assertEquals(0, result);
 
-        ByteBuf statBuf = PooledByteBufAllocator.DEFAULT.directBuffer(256);
+        ByteBuf statBuf = Buffers.pooledDirect(256);
         handle.statxAsync(NativeConstants.StatxMask.SIZE, 0, statBuf).join();
         FileStats stats = new FileStats(statBuf);
         assertTrue(stats.size >= 4096);
@@ -186,18 +177,19 @@ class IoUringFileIoHandleIntegrationTest {
     }
 
     @Test
+    @RequiresKernel("6.9")
     void truncateAsync() throws Exception {
         openHandle(READ, WRITE, CREATE, TRUNCATE_EXISTING);
 
         byte[] data = new byte[1000];
         Arrays.fill(data, (byte) 'X');
-        ByteBuf buf = directBuffer(data);
+        ByteBuf buf = Buffers.direct(data);
         handle.writeAsync(buf, 0, false).join();
 
         int result = handle.truncateAsync(500).join();
         assertEquals(0, result);
 
-        ByteBuf statBuf = PooledByteBufAllocator.DEFAULT.directBuffer(256);
+        ByteBuf statBuf = Buffers.pooledDirect(256);
         handle.statxAsync(NativeConstants.StatxMask.SIZE, 0, statBuf).join();
         FileStats stats = new FileStats(statBuf);
         assertEquals(500, stats.size);
@@ -211,7 +203,7 @@ class IoUringFileIoHandleIntegrationTest {
         openHandle(READ, WRITE, CREATE, TRUNCATE_EXISTING);
 
         byte[] data = "fsync-test".getBytes(StandardCharsets.UTF_8);
-        ByteBuf buf = directBuffer(data);
+        ByteBuf buf = Buffers.direct(data);
         handle.writeAsync(buf, 0, false).join();
 
         int result = handle.fsyncAsync(false, 0, 0).join();
@@ -225,7 +217,7 @@ class IoUringFileIoHandleIntegrationTest {
         openHandle(READ, WRITE, CREATE, TRUNCATE_EXISTING);
 
         byte[] data = "fdatasync".getBytes(StandardCharsets.UTF_8);
-        ByteBuf buf = directBuffer(data);
+        ByteBuf buf = Buffers.direct(data);
         handle.writeAsync(buf, 0, false).join();
 
         int result = handle.fsyncAsync(true, 0, 0).join();
@@ -239,11 +231,11 @@ class IoUringFileIoHandleIntegrationTest {
         openHandle(READ, WRITE, CREATE, TRUNCATE_EXISTING);
 
         byte[] data = new byte[1234];
-        ByteBuf writeBuf = directBuffer(data);
+        ByteBuf writeBuf = Buffers.direct(data);
         writeBuf.writerIndex(data.length);
         handle.writeAsync(writeBuf, 0, false).join();
 
-        ByteBuf statBuf = PooledByteBufAllocator.DEFAULT.directBuffer(256);
+        ByteBuf statBuf = Buffers.pooledDirect(256);
         int result = handle.statxAsync(NativeConstants.StatxMask.BASIC_STATS, 0, statBuf).join();
         assertEquals(0, result);
 
@@ -277,11 +269,11 @@ class IoUringFileIoHandleIntegrationTest {
         handle = IoUringFileIoHandle.createTempFile(eventLoop, READ, WRITE).get();
 
         byte[] data = "temp-data".getBytes(StandardCharsets.UTF_8);
-        ByteBuf writeBuf = directBuffer(data);
+        ByteBuf writeBuf = Buffers.direct(data);
         int written = handle.writeAsync(writeBuf, 0, false).join();
         assertEquals(data.length, written);
 
-        ByteBuf readBuf = directBuffer(data.length);
+        ByteBuf readBuf = Buffers.direct(data.length);
         int read = handle.readAsync(readBuf, 0).join();
         assertEquals(data.length, read);
 
@@ -294,7 +286,7 @@ class IoUringFileIoHandleIntegrationTest {
         openHandle(READ, WRITE, CREATE, TRUNCATE_EXISTING);
 
         byte[] data = "callback-test".getBytes(StandardCharsets.UTF_8);
-        ByteBuf buf = directBuffer(data);
+        ByteBuf buf = Buffers.direct(data);
 
         int[] resultHolder = new int[1];
         Throwable[] errorHolder = new Throwable[1];
@@ -322,9 +314,9 @@ class IoUringFileIoHandleIntegrationTest {
 
     @Test
     void negativeResultCreatesException() throws Exception {
-        openHandle(READ);
+        openHandle(READ, CREATE);
 
-        ByteBuf buf = directBuffer(10);
+        ByteBuf buf = Buffers.direct(10);
         buf.writerIndex(10);
 
         assertThrows(IOException.class, () -> handle.writeAsync(buf, 0, false).join());
@@ -352,10 +344,10 @@ class IoUringFileIoHandleIntegrationTest {
         openHandle(READ, WRITE, CREATE, TRUNCATE_EXISTING);
         handle.closeAsync().get();
 
-        ByteBuf buf = directBuffer(10);
+        ByteBuf buf = Buffers.direct(10);
         buf.writerIndex(10);
 
-        assertThrows(IOException.class, () -> handle.writeAsync(buf, 0, false).join());
+        assertThrows(IllegalStateException.class, () -> handle.writeAsync(buf, 0, false).join());
 
         buf.release();
     }
@@ -379,12 +371,12 @@ class IoUringFileIoHandleIntegrationTest {
         int size = 1024 * 1024;
         byte[] data = new byte[size];
         Arrays.fill(data, (byte) 'Z');
-        ByteBuf buf = directBuffer(data);
+        ByteBuf buf = Buffers.direct(data);
 
         int written = handle.writeAsync(buf, 0, false).join();
         assertEquals(size, written);
 
-        ByteBuf statBuf = PooledByteBufAllocator.DEFAULT.directBuffer(256);
+        ByteBuf statBuf = Buffers.pooledDirect(256);
         handle.statxAsync(NativeConstants.StatxMask.SIZE, 0, statBuf).join();
         FileStats stats = new FileStats(statBuf);
         assertEquals(size, stats.size);
@@ -399,14 +391,14 @@ class IoUringFileIoHandleIntegrationTest {
 
         byte[] data = new byte[8192];
         Arrays.fill(data, (byte) 'P');
-        ByteBuf buf = directBuffer(data);
+        ByteBuf buf = Buffers.direct(data);
         handle.writeAsync(buf, 0, false).join();
 
         int mode = NativeConstants.FallocateFlags.PUNCH_HOLE | NativeConstants.FallocateFlags.KEEP_SIZE;
         int result = handle.fallocateAsync(4096, 4096, mode).join();
         assertEquals(0, result);
 
-        ByteBuf statBuf = PooledByteBufAllocator.DEFAULT.directBuffer(256);
+        ByteBuf statBuf = Buffers.pooledDirect(256);
         handle.statxAsync(NativeConstants.StatxMask.SIZE, 0, statBuf).join();
         FileStats stats = new FileStats(statBuf);
         assertEquals(8192, stats.size);
@@ -422,13 +414,13 @@ class IoUringFileIoHandleIntegrationTest {
         byte[] first = "XXXX".getBytes(StandardCharsets.UTF_8);
         byte[] second = "YYYY".getBytes(StandardCharsets.UTF_8);
 
-        ByteBuf buf1 = directBuffer(first);
-        ByteBuf buf2 = directBuffer(second);
+        ByteBuf buf1 = Buffers.direct(first);
+        ByteBuf buf2 = Buffers.direct(second);
 
         handle.writeAsync(buf1, 0, false).join();
         handle.writeAsync(buf2, 100, false).join();
 
-        ByteBuf statBuf = PooledByteBufAllocator.DEFAULT.directBuffer(256);
+        ByteBuf statBuf = Buffers.pooledDirect(256);
         handle.statxAsync(NativeConstants.StatxMask.SIZE, 0, statBuf).join();
         FileStats stats = new FileStats(statBuf);
         assertEquals(104, stats.size);
@@ -443,10 +435,10 @@ class IoUringFileIoHandleIntegrationTest {
         openHandle(READ, WRITE, CREATE, TRUNCATE_EXISTING);
 
         byte[] data = "0123456789".getBytes(StandardCharsets.UTF_8);
-        ByteBuf writeBuf = directBuffer(data);
+        ByteBuf writeBuf = Buffers.direct(data);
         handle.writeAsync(writeBuf, 0, false).join();
 
-        ByteBuf readBuf = directBuffer(3);
+        ByteBuf readBuf = Buffers.direct(3);
         int read = handle.readAsync(readBuf, 5).join();
         assertEquals(3, read);
 

@@ -1,7 +1,7 @@
 package io.jiouring.benchmark;
 
 import io.jiouring.file.SyscallFuture;
-import io.jiouring.file.BufferUtils;
+import io.jiouring.file.Buffers;
 import io.netty.buffer.ByteBuf;
 import org.openjdk.jmh.annotations.*;
 
@@ -35,7 +35,7 @@ public class RandomIoState {
         ThreadLocalRandom rnd = ThreadLocalRandom.current();
 
         for (int i = 0; i < batchSize; i++) {
-            buffers[i] = BufferUtils.alignedByteBuf(bufferSize);
+            buffers[i] = Buffers.alignedByteBuf(bufferSize);
             nioBuffers[i] = buffers[i].nioBuffer();
 
             // Random aligned offset

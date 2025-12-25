@@ -33,13 +33,13 @@ public final class NativeConstants {
         public static final byte WRITE           = 23;
         public static final byte FADVISE         = 24;
         public static final byte MADVISE         = 25;
-        public static final byte SPLICE          = 28;
+        public static final byte SPLICE          = 30;
         public static final byte TEE             = 33;
         public static final byte SHUTDOWN        = 34;
         public static final byte RENAMEAT        = 35;
         public static final byte UNLINKAT        = 36;
         public static final byte MKDIRAT         = 37;
-        public static final byte FTRUNCATE       = 46;
+        public static final byte FTRUNCATE       = 55;
     }
 
     public static final class OpenFlags {
@@ -118,11 +118,14 @@ public final class NativeConstants {
     public static final class AtFlags {
         private AtFlags() {}
 
+        public static final int AT_FDCWD      = -100;
         public static final int AT_REMOVEDIR  = 0x0200;
         public static final int AT_EMPTY_PATH = 0x1000;
     }
 
-    public static class FallocateFlags {
+    public static final class FallocateFlags {
+        private FallocateFlags() {}
+
         public static final int KEEP_SIZE      = 0x01;
         public static final int PUNCH_HOLE     = 0x02;
         public static final int NO_HIDE_STALE  = 0x04;
@@ -132,7 +135,9 @@ public final class NativeConstants {
         public static final int UNSHARE_RANGE  = 0x40;
     }
 
-    public static class StatxMask {
+    public static final class StatxMask {
+        private StatxMask() {}
+
         public static final int TYPE        = 0x00000001;
         public static final int MODE        = 0x00000002;
         public static final int NLINK       = 0x00000004;
@@ -149,7 +154,9 @@ public final class NativeConstants {
         public static final int ALL         = 0x00000fff;
     }
 
-    public static class StatxFlags {
+    public static final class StatxFlags {
+        private StatxFlags() {}
+
         public static final int AT_SYNC_AS_STAT     = 0x0000;
         public static final int AT_FORCE_SYNC       = 0x2000;
         public static final int AT_DONT_SYNC        = 0x4000;

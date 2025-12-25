@@ -11,7 +11,7 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.NoSuchElementException;
 
-public class AsyncOpRegistry implements Iterable<AsyncOpContext> {
+class AsyncOpRegistry implements Iterable<AsyncOpContext> {
 
     private static final Logger logger = LogManager.getLogger(AsyncOpRegistry.class);
 
@@ -20,11 +20,11 @@ public class AsyncOpRegistry implements Iterable<AsyncOpContext> {
     private final int[] freeIndices;
     private int freeTop;
 
-    public AsyncOpRegistry() {
+    AsyncOpRegistry() {
         this(SystemPropertyUtil.getInt("io.netty.iouring.ringSize", 4096) * 2);
     }
 
-    public AsyncOpRegistry(int maxInFlight) {
+    AsyncOpRegistry(int maxInFlight) {
         if (maxInFlight > 65536) {
             throw new IllegalArgumentException("Cannot exceed 64k slots due to Short ID mapping");
         }
@@ -34,9 +34,7 @@ public class AsyncOpRegistry implements Iterable<AsyncOpContext> {
         this.freeIndices = new int[maxInFlight];
         for (int i = 0; i < maxInFlight; i++) this.freeIndices[i] = i;
 
-        // -1 for 0 based index adjustment
-        // -1 for special id field reservation
-        this.freeTop = maxInFlight - 2;
+        this.freeTop = maxInFlight - 1;
 
         this.contextPool = new AsyncOpContext[maxInFlight];
         for (int i = 0; i < maxInFlight; i++) {
@@ -45,15 +43,15 @@ public class AsyncOpRegistry implements Iterable<AsyncOpContext> {
         }
     }
 
-    public boolean isEmpty() {
-        return freeTop == maxInFlight - 2;
+    boolean isEmpty() {
+        return freeTop == maxInFlight - 1;
     }
 
-    public boolean isFull() {
+    boolean isFull() {
         return freeTop < 0;
     }
 
-    public AsyncOpContext next(byte op) {
+    AsyncOpContext next(byte op) {
         if (freeTop < 0) {
             throw new IllegalStateException("Registry full; too many in-flight ops");
         }
@@ -65,7 +63,7 @@ public class AsyncOpRegistry implements Iterable<AsyncOpContext> {
         return ctx;
     }
 
-    public void complete(IoUringIoEvent event) {
+    void complete(IoUringIoEvent event) {
         short id = event.data();
 
         int index = id - Short.MIN_VALUE;
@@ -85,7 +83,7 @@ public class AsyncOpRegistry implements Iterable<AsyncOpContext> {
     }
 
     // Only release if it was actually in use to prevent double-free corruption
-    public void release(AsyncOpContext ctx, Throwable cause) {
+    void release(AsyncOpContext ctx, Throwable cause) {
         if (ctx.inUse) {
             ctx.inUse = false;
             ctx.uringId = -1;
@@ -96,7 +94,7 @@ public class AsyncOpRegistry implements Iterable<AsyncOpContext> {
         }
     }
 
-    public List<AsyncOpContext> findStuckOps(long timeoutNs) {
+    List<AsyncOpContext> findStuckOps(long timeoutNs) {
         long now = System.nanoTime();
         List<AsyncOpContext> stuck = null;
 

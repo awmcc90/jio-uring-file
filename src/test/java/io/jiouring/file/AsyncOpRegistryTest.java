@@ -39,6 +39,7 @@ class AsyncOpRegistryTest {
     @Test
     void constructorWithSizeOne() {
         AsyncOpRegistry registry = new AsyncOpRegistry(1);
+        registry.next((byte) 1);
         assertTrue(registry.isFull());
     }
 
@@ -67,6 +68,7 @@ class AsyncOpRegistryTest {
         AsyncOpRegistry registry = new AsyncOpRegistry(3);
         registry.next((byte) 1);
         registry.next((byte) 1);
+        registry.next((byte) 1);
         assertTrue(registry.isFull());
     }
 
@@ -82,6 +84,7 @@ class AsyncOpRegistryTest {
     @Test
     void nextWhenFullThrows() {
         AsyncOpRegistry registry = new AsyncOpRegistry(3);
+        registry.next((byte) 1);
         registry.next((byte) 1);
         registry.next((byte) 1);
         assertThrows(IllegalStateException.class, () -> registry.next((byte) 1));
@@ -111,6 +114,7 @@ class AsyncOpRegistryTest {
     void releaseReturnsContextToPool() {
         AsyncOpRegistry registry = new AsyncOpRegistry(3);
         AsyncOpContext ctx = registry.next((byte) 1);
+        registry.next((byte) 1);
         registry.next((byte) 1);
         assertTrue(registry.isFull());
 
@@ -154,6 +158,7 @@ class AsyncOpRegistryTest {
         AsyncOpRegistry registry = new AsyncOpRegistry(3);
         AsyncOpContext ctx = registry.next((byte) 1);
         registry.next((byte) 1);
+        registry.next((byte) 1);
         assertTrue(registry.isFull());
 
         ctx.inUse = false;
@@ -165,6 +170,7 @@ class AsyncOpRegistryTest {
     void doubleReleaseIgnored() {
         AsyncOpRegistry registry = new AsyncOpRegistry(3);
         AsyncOpContext ctx = registry.next((byte) 1);
+        registry.next((byte) 1);
         registry.next((byte) 1);
         assertTrue(registry.isFull());
 

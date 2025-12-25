@@ -1,5 +1,6 @@
 package io.jiouring.file;
 
+import io.jiouring.utils.RequiresKernel;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.IoEventLoop;
@@ -11,7 +12,6 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
@@ -33,7 +33,7 @@ import static org.junit.jupiter.api.Assertions.*;
 @Timeout(60)
 class IoUringFileIntegrationTest {
 
-    private static final Logger logger = LogManager.getLogger(SyscallFuture.class);
+    private static final Logger logger = LogManager.getLogger(IoUringFileIntegrationTest.class);
 
     private static MultiThreadIoEventLoopGroup group;
     private static IoEventLoop eventLoop;
@@ -77,14 +77,6 @@ class IoUringFileIntegrationTest {
         return file;
     }
 
-    private ByteBuf directBuffer(int size) {
-        return Unpooled.directBuffer(size);
-    }
-
-    private ByteBuf directBuffer(byte[] data) {
-        return Unpooled.directBuffer(data.length).writeBytes(data);
-    }
-
     @Test
     void openAndClose() throws ExecutionException, InterruptedException {
         file = IoUringFile.open(testPath, eventLoop, READ, WRITE, CREATE).get();
@@ -97,8 +89,8 @@ class IoUringFileIntegrationTest {
         openFile(READ, WRITE, CREATE, TRUNCATE_EXISTING);
 
         byte[] data = "hello-io-uring".getBytes(StandardCharsets.UTF_8);
-        ByteBuf writeBuf = directBuffer(data);
-        ByteBuf readBuf = directBuffer(data.length);
+        ByteBuf writeBuf = Buffers.direct(data);
+        ByteBuf readBuf = Buffers.direct(data.length);
 
         int written = file.writeAsync(writeBuf, 0).get();
         assertEquals(data.length, written);
@@ -119,7 +111,7 @@ class IoUringFileIntegrationTest {
         openFile(READ, WRITE, CREATE, TRUNCATE_EXISTING);
 
         byte[] data = "dsync-data".getBytes(StandardCharsets.UTF_8);
-        ByteBuf buf = directBuffer(data);
+        ByteBuf buf = Buffers.direct(data);
 
         int written = file.writeAsync(buf, 0, true).get();
         assertEquals(data.length, written);
@@ -134,13 +126,13 @@ class IoUringFileIntegrationTest {
         byte[] first = "AAAA".getBytes(StandardCharsets.UTF_8);
         byte[] second = "BBBB".getBytes(StandardCharsets.UTF_8);
 
-        ByteBuf buf1 = directBuffer(first);
-        ByteBuf buf2 = directBuffer(second);
+        ByteBuf buf1 = Buffers.direct(first);
+        ByteBuf buf2 = Buffers.direct(second);
 
         file.writeAsync(buf1, 0).get();
         file.writeAsync(buf2, 4).get();
 
-        ByteBuf readBuf = directBuffer(8);
+        ByteBuf readBuf = Buffers.direct(8);
         file.readAsync(readBuf, 0).get();
 
         byte[] result = new byte[8];
@@ -157,10 +149,10 @@ class IoUringFileIntegrationTest {
         openFile(READ, WRITE, CREATE, TRUNCATE_EXISTING);
 
         byte[] data = "0123456789".getBytes(StandardCharsets.UTF_8);
-        ByteBuf writeBuf = directBuffer(data);
+        ByteBuf writeBuf = Buffers.direct(data);
         file.writeAsync(writeBuf, 0).get();
 
-        ByteBuf readBuf = directBuffer(4);
+        ByteBuf readBuf = Buffers.direct(4);
         int read = file.readAsync(readBuf, 3).get();
         assertEquals(4, read);
 
@@ -176,14 +168,14 @@ class IoUringFileIntegrationTest {
     void writevMultipleBuffers() throws Exception {
         openFile(READ, WRITE, CREATE, TRUNCATE_EXISTING);
 
-        ByteBuf buf1 = directBuffer("AAA".getBytes(StandardCharsets.UTF_8));
-        ByteBuf buf2 = directBuffer("BBB".getBytes(StandardCharsets.UTF_8));
-        ByteBuf buf3 = directBuffer("CCC".getBytes(StandardCharsets.UTF_8));
+        ByteBuf buf1 = Buffers.direct("AAA".getBytes(StandardCharsets.UTF_8));
+        ByteBuf buf2 = Buffers.direct("BBB".getBytes(StandardCharsets.UTF_8));
+        ByteBuf buf3 = Buffers.direct("CCC".getBytes(StandardCharsets.UTF_8));
 
         int written = file.writevAsync(0, buf1, buf2, buf3).get();
         assertEquals(9, written);
 
-        ByteBuf readBuf = directBuffer(9);
+        ByteBuf readBuf = Buffers.direct(9);
         file.readAsync(readBuf, 0).get();
 
         byte[] result = new byte[9];
@@ -201,12 +193,12 @@ class IoUringFileIntegrationTest {
         openFile(READ, WRITE, CREATE, TRUNCATE_EXISTING);
 
         byte[] data = "XXXYYYZZZ".getBytes(StandardCharsets.UTF_8);
-        ByteBuf writeBuf = directBuffer(data);
+        ByteBuf writeBuf = Buffers.direct(data);
         file.writeAsync(writeBuf, 0).get();
 
-        ByteBuf buf1 = directBuffer(3);
-        ByteBuf buf2 = directBuffer(3);
-        ByteBuf buf3 = directBuffer(3);
+        ByteBuf buf1 = Buffers.direct(3);
+        ByteBuf buf2 = Buffers.direct(3);
+        ByteBuf buf3 = Buffers.direct(3);
 
         int read = file.readvAsync(0, buf1, buf2, buf3).get();
         assertEquals(9, read);
@@ -229,7 +221,6 @@ class IoUringFileIntegrationTest {
     }
 
     @Test
-    @Disabled("fallocate op fields appear incorrectly mapped")
     void allocateExtendsFile() throws Exception {
         openFile(READ, WRITE, CREATE, TRUNCATE_EXISTING);
 
@@ -240,13 +231,13 @@ class IoUringFileIntegrationTest {
     }
 
     @Test
-    @Disabled("ftruncate completion handling issue")
+    @RequiresKernel("6.9")
     void truncateReducesFileSize() throws Exception {
         openFile(READ, WRITE, CREATE, TRUNCATE_EXISTING);
 
         byte[] data = new byte[1000];
         Arrays.fill(data, (byte) 'X');
-        ByteBuf buf = directBuffer(data);
+        ByteBuf buf = Buffers.direct(data);
         file.writeAsync(buf, 0).get();
 
         file.truncate(500).get();
@@ -258,12 +249,11 @@ class IoUringFileIntegrationTest {
     }
 
     @Test
-    @Disabled("fsync completion handling issue")
     void fsyncCompletesSuccessfully() throws Exception {
         openFile(READ, WRITE, CREATE, TRUNCATE_EXISTING);
 
         byte[] data = "fsync-test".getBytes(StandardCharsets.UTF_8);
-        ByteBuf buf = directBuffer(data);
+        ByteBuf buf = Buffers.direct(data);
         file.writeAsync(buf, 0).get();
 
         int result = file.fsync().get();
@@ -273,12 +263,11 @@ class IoUringFileIntegrationTest {
     }
 
     @Test
-    @Disabled("fsync completion handling issue")
     void fsyncDataOnly() throws Exception {
         openFile(READ, WRITE, CREATE, TRUNCATE_EXISTING);
 
         byte[] data = "fdatasync-test".getBytes(StandardCharsets.UTF_8);
-        ByteBuf buf = directBuffer(data);
+        ByteBuf buf = Buffers.direct(data);
         file.writeAsync(buf, 0).get();
 
         int result = file.fsync(true, 0, 0).get();
@@ -288,12 +277,11 @@ class IoUringFileIntegrationTest {
     }
 
     @Test
-    @Disabled("statx completion handling issue")
     void statReturnsFileInfo() throws Exception {
         openFile(READ, WRITE, CREATE, TRUNCATE_EXISTING);
 
         byte[] data = new byte[1234];
-        ByteBuf buf = directBuffer(data);
+        ByteBuf buf = Buffers.direct(data);
         buf.writerIndex(data.length);
         file.writeAsync(buf, 0).get();
 
@@ -321,10 +309,10 @@ class IoUringFileIntegrationTest {
         assertNotNull(file);
 
         byte[] data = "temp-file-data".getBytes(StandardCharsets.UTF_8);
-        ByteBuf buf = directBuffer(data);
+        ByteBuf buf = Buffers.direct(data);
         file.writeAsync(buf, 0).get();
 
-        ByteBuf readBuf = directBuffer(data.length);
+        ByteBuf readBuf = Buffers.direct(data.length);
         file.readAsync(readBuf, 0).get();
 
         byte[] result = new byte[data.length];
@@ -360,7 +348,7 @@ class IoUringFileIntegrationTest {
     void nonWritableBufferThrowsOnRead() throws Exception {
         openFile(READ, WRITE, CREATE, TRUNCATE_EXISTING);
 
-        ByteBuf buf = directBuffer(10);
+        ByteBuf buf = Buffers.direct(10);
         buf.writerIndex(10);
         assertThrows(IllegalArgumentException.class, () ->
             file.readAsync(buf, 0));
@@ -371,7 +359,7 @@ class IoUringFileIntegrationTest {
     void nonReadableBufferThrowsOnWrite() throws Exception {
         openFile(READ, WRITE, CREATE, TRUNCATE_EXISTING);
 
-        ByteBuf buf = directBuffer(10);
+        ByteBuf buf = Buffers.direct(10);
         assertThrows(IllegalArgumentException.class, () ->
             file.writeAsync(buf, 0));
         buf.release();
@@ -401,7 +389,7 @@ class IoUringFileIntegrationTest {
 
         for (int i = 0; i < numOps; i++) {
             byte[] data = String.format("%04d", i).getBytes(StandardCharsets.UTF_8);
-            ByteBuf buf = directBuffer(data);
+            ByteBuf buf = Buffers.direct(data);
             buffers.add(buf);
             futures.add(file.writeAsync(buf, i * 4));
         }
@@ -424,14 +412,14 @@ class IoUringFileIntegrationTest {
             String s = String.format("%04d", i);
             System.arraycopy(s.getBytes(), 0, data, i * 4, 4);
         }
-        ByteBuf writeBuf = directBuffer(data);
+        ByteBuf writeBuf = Buffers.direct(data);
         file.writeAsync(writeBuf, 0).get();
 
         List<CompletableFuture<Integer>> futures = new ArrayList<>();
         List<ByteBuf> buffers = new ArrayList<>();
 
         for (int i = 0; i < 100; i++) {
-            ByteBuf buf = directBuffer(4);
+            ByteBuf buf = Buffers.direct(4);
             buffers.add(buf);
             futures.add(file.readAsync(buf, i * 4));
         }
@@ -463,10 +451,10 @@ class IoUringFileIntegrationTest {
         openFile(READ, WRITE, CREATE, TRUNCATE_EXISTING);
 
         byte[] data = "short".getBytes(StandardCharsets.UTF_8);
-        ByteBuf writeBuf = directBuffer(data);
+        ByteBuf writeBuf = Buffers.direct(data);
         file.writeAsync(writeBuf, 0).get();
 
-        ByteBuf readBuf = directBuffer(100);
+        ByteBuf readBuf = Buffers.direct(100);
         int read = file.readAsync(readBuf, 1000).get();
         assertEquals(0, read);
 
@@ -475,14 +463,13 @@ class IoUringFileIntegrationTest {
     }
 
     @Test
-    @Disabled("statx completion handling issue")
     void largeWrite() throws Exception {
         openFile(READ, WRITE, CREATE, TRUNCATE_EXISTING);
 
         int size = 1024 * 1024;
         byte[] data = new byte[size];
         Arrays.fill(data, (byte) 'X');
-        ByteBuf writeBuf = directBuffer(data);
+        ByteBuf writeBuf = Buffers.direct(data);
 
         int written = file.writeAsync(writeBuf, 0).get();
         assertEquals(size, written);
@@ -494,17 +481,17 @@ class IoUringFileIntegrationTest {
     }
 
     @Test
-    @Disabled("fallocate op fields appear incorrectly mapped")
     void punchHoleCreatesHole() throws Exception {
         openFile(READ, WRITE, CREATE, TRUNCATE_EXISTING);
 
         int size = 8192;
         byte[] data = new byte[size];
         Arrays.fill(data, (byte) 'X');
-        ByteBuf writeBuf = directBuffer(data);
+        ByteBuf writeBuf = Buffers.direct(data);
         file.writeAsync(writeBuf, 0).get();
 
         file.punchHole(4096, 4096).get();
+        file.fsync().get();
 
         FileStats stats = file.stat().get();
         assertEquals(size, stats.size);
@@ -517,10 +504,10 @@ class IoUringFileIntegrationTest {
         openFile(READ, WRITE, CREATE, TRUNCATE_EXISTING);
 
         byte[] data = "testdata".getBytes(StandardCharsets.UTF_8);
-        ByteBuf writeBuf = directBuffer(data);
+        ByteBuf writeBuf = Buffers.direct(data);
         file.writeAsync(writeBuf, 0).get();
 
-        ByteBuf readBuf = directBuffer(8);
+        ByteBuf readBuf = Buffers.direct(8);
         assertEquals(0, readBuf.writerIndex());
 
         file.readAsync(readBuf, 0).get();
@@ -535,7 +522,7 @@ class IoUringFileIntegrationTest {
         openFile(READ, WRITE, CREATE, TRUNCATE_EXISTING);
 
         byte[] data = "testdata".getBytes(StandardCharsets.UTF_8);
-        ByteBuf writeBuf = directBuffer(data);
+        ByteBuf writeBuf = Buffers.direct(data);
         assertEquals(0, writeBuf.readerIndex());
         assertEquals(8, writeBuf.readableBytes());
 
@@ -569,7 +556,6 @@ class IoUringFileIntegrationTest {
     }
 
     @Test
-    @Disabled("statx completion handling issue")
     void truncateExistingOnOpen() throws Exception {
         Files.writeString(testPath, "existing content");
         assertTrue(Files.size(testPath) > 0);
@@ -584,7 +570,7 @@ class IoUringFileIntegrationTest {
         openFile(READ, WRITE, CREATE, TRUNCATE_EXISTING);
 
         byte[] data = "test".getBytes(StandardCharsets.UTF_8);
-        ByteBuf buf = directBuffer(data);
+        ByteBuf buf = Buffers.direct(data);
 
         CompletableFuture<Integer> future = file.writeAsync(buf, 0);
         assertFalse(future.cancel(true));

@@ -49,11 +49,11 @@ public class SyscallFuture {
         }
 
         if (runImmediately) {
-            invokeHandler(handler, this.result, this.exception);
+            safeInvokeHandler(handler, this.result, this.exception);
         }
     }
 
-    public void complete(int res) {
+     void complete(int res) {
         BiConsumer<Integer, Throwable> handlerToRun;
         Thread waiterToUnpark;
         Throwable computedException = null;
@@ -83,7 +83,7 @@ public class SyscallFuture {
         }
 
         if (handlerToRun != null) {
-            invokeHandler(handlerToRun, this.result, this.exception);
+            safeInvokeHandler(handlerToRun, this.result, this.exception);
         }
 
         if (waiterToUnpark != null) {
@@ -108,19 +108,11 @@ public class SyscallFuture {
         }
 
         if (handlerToRun != null) {
-            invokeHandler(handlerToRun, this.result, this.exception);
+            safeInvokeHandler(handlerToRun, this.result, this.exception);
         }
 
         if (waiterToUnpark != null) {
             LockSupport.unpark(waiterToUnpark);
-        }
-    }
-
-    private void invokeHandler(BiConsumer<Integer, Throwable> handler, int res, Throwable ex) {
-        try {
-            handler.accept(res, ex);
-        } catch (Throwable t) {
-            logger.error("User callback crashed", t);
         }
     }
 
@@ -147,5 +139,29 @@ public class SyscallFuture {
             throw new IOException(this.exception);
         }
         return this.result;
+    }
+
+    private static void safeInvokeHandler(BiConsumer<Integer, Throwable> handler, int res, Throwable ex) {
+        try {
+            handler.accept(res, ex);
+        } catch (Throwable t) {
+            logger.error("User callback crashed", t);
+        }
+    }
+
+    static SyscallFuture completed(int res) {
+        SyscallFuture f = new SyscallFuture();
+        f.complete(res);
+        return f;
+    }
+
+    static SyscallFuture completed() {
+        return completed(0);
+    }
+
+    static SyscallFuture failed(Throwable cause) {
+        SyscallFuture f = new SyscallFuture();
+        f.fail(cause);
+        return f;
     }
 }

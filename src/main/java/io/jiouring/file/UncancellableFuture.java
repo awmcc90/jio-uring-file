@@ -2,7 +2,7 @@ package io.jiouring.file;
 
 import java.util.concurrent.CompletableFuture;
 
-public class UncancellableFuture<T> extends CompletableFuture<T> {
+public final class UncancellableFuture<T> extends CompletableFuture<T> {
     @Override
     public boolean cancel(boolean mayInterruptIfRunning) {
         return false;

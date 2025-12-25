@@ -1,27 +1,37 @@
 package io.jiouring.file;
 
-public class AsyncOpContext {
+class AsyncOpContext {
+    final short id;
 
-    public final short id;
+    volatile boolean inUse = false;
+    volatile long uringId = -1;
 
-    public volatile boolean inUse = false;
-    public volatile long uringId = -1;
+    byte op = 0;
+    long startTime = 0L;
 
-    public byte op = 0;
-    public long startTime = 0L;
+    final SyscallFuture future = new SyscallFuture();
 
-    public final SyscallFuture future = new SyscallFuture();
-
-    public AsyncOpContext(short id) {
+    AsyncOpContext(short id) {
         this.id = id;
     }
 
     // NOTE: The order of the resets matters
-    public void reset(byte op) {
+    void reset(byte op) {
         this.op = op;
         this.future.reset(op);
         this.startTime = System.nanoTime();
         this.uringId = -1;
         this.inUse = true;
+    }
+
+    @Override
+    public String toString() {
+        StringBuilder sb = new StringBuilder("AsyncOpContext{");
+        sb.append("id=").append(id);
+        sb.append(", op=").append(op);
+        sb.append(", inUse=").append(inUse);
+        if (inUse) sb.append(", uringId=").append(uringId);
+        sb.append('}');
+        return sb.toString();
     }
 }

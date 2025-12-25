@@ -1,7 +1,6 @@
 package io.jiouring.file;
 
 import io.netty.buffer.ByteBuf;
-import io.netty.buffer.Unpooled;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -9,9 +8,8 @@ import static org.junit.jupiter.api.Assertions.*;
 class FileStatsTest {
 
     private ByteBuf createStatxBuffer() {
-        ByteBuf buf = Unpooled.buffer(256);
-        buf.writeZero(256);
-        return buf;
+        return Buffers.direct(256)
+            .writeZero(256);
     }
 
     @Test
@@ -44,9 +42,9 @@ class FileStatsTest {
     @Test
     void parsesMode() {
         ByteBuf buf = createStatxBuffer();
-        buf.setShort(0x1C, (short) 0644);
+        buf.setShort(0x1C, (short) 420);
         FileStats stats = new FileStats(buf);
-        assertEquals(0644, stats.mode);
+        assertEquals(420, stats.mode);
         buf.release();
     }
 
@@ -62,7 +60,7 @@ class FileStatsTest {
     @Test
     void parsesSize() {
         ByteBuf buf = createStatxBuffer();
-        buf.setLong(0x40, 1024L * 1024L * 1024L);
+        buf.setLong(0x28, 1024L * 1024L * 1024L);
         FileStats stats = new FileStats(buf);
         assertEquals(1024L * 1024L * 1024L, stats.size);
         buf.release();
@@ -72,17 +70,17 @@ class FileStatsTest {
     void parsesAllFieldsTogether() {
         ByteBuf buf = createStatxBuffer();
         buf.setInt(0x10, 3);
-        buf.setInt(0x14, 500);
-        buf.setInt(0x18, 501);
-        buf.setShort(0x1C, (short) 0755);
-        buf.setLong(0x40, 4096L);
+        buf.setInt(0x14, 320);
+        buf.setInt(0x18, 321);
+        buf.setShort(0x1C, (short) 493);
+        buf.setLong(0x28, 4096L);
 
         FileStats stats = new FileStats(buf);
 
         assertEquals(3, stats.nlink);
-        assertEquals(500, stats.uid);
-        assertEquals(501, stats.gid);
-        assertEquals(0755, stats.mode);
+        assertEquals(320, stats.uid);
+        assertEquals(321, stats.gid);
+        assertEquals(493, stats.mode);
         assertEquals(4096L, stats.size);
         buf.release();
     }
@@ -119,7 +117,7 @@ class FileStatsTest {
     @Test
     void parsesMaxLongSize() {
         ByteBuf buf = createStatxBuffer();
-        buf.setLong(0x40, Long.MAX_VALUE);
+        buf.setLong(0x28, Long.MAX_VALUE);
         FileStats stats = new FileStats(buf);
         assertEquals(Long.MAX_VALUE, stats.size);
         buf.release();
@@ -147,7 +145,7 @@ class FileStatsTest {
     @Test
     void regularFileMode() {
         ByteBuf buf = createStatxBuffer();
-        int regularFile = 0100644;
+        int regularFile = 33188;
         buf.setShort(0x1C, (short) regularFile);
         FileStats stats = new FileStats(buf);
         assertEquals(regularFile & 0xFFFF, stats.mode);
@@ -157,7 +155,7 @@ class FileStatsTest {
     @Test
     void directoryMode() {
         ByteBuf buf = createStatxBuffer();
-        int directory = 040755;
+        int directory = 16877;
         buf.setShort(0x1C, (short) directory);
         FileStats stats = new FileStats(buf);
         assertEquals(directory & 0xFFFF, stats.mode);
@@ -167,7 +165,7 @@ class FileStatsTest {
     @Test
     void symbolicLinkMode() {
         ByteBuf buf = createStatxBuffer();
-        int symlink = 0120777;
+        int symlink = 41471;
         buf.setShort(0x1C, (short) symlink);
         FileStats stats = new FileStats(buf);
         assertEquals(symlink & 0xFFFF, stats.mode);
