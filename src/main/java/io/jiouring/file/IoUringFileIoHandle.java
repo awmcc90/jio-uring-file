@@ -9,8 +9,8 @@ import io.netty.channel.uring.IoUringIoEvent;
 import io.netty.channel.uring.IoUringIoHandle;
 import io.netty.channel.uring.IoUringIoOps;
 import io.netty.util.concurrent.ScheduledFuture;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -26,7 +26,7 @@ import java.util.function.Function;
 
 public class IoUringFileIoHandle implements IoUringIoHandle {
 
-    private static final Logger logger = LogManager.getLogger(IoUringFileIoHandle.class);
+    private static final Logger logger = LoggerFactory.getLogger(IoUringFileIoHandle.class);
     private static final long OP_TIMEOUT_NS = 30_000_000_000L;
 
     public final Path path;
@@ -39,8 +39,8 @@ public class IoUringFileIoHandle implements IoUringIoHandle {
     private State state = State.INITIALIZING;
     private boolean closeSubmitted = false;
 
-    private final AtomicReference<CompletableFuture<Integer>> closeFuture = new AtomicReference<>(null);
     private final AtomicReference<CompletableFuture<IoUringFileIoHandle>> openFuture = new AtomicReference<>(null);
+    private final AtomicReference<CompletableFuture<Integer>> closeFuture = new AtomicReference<>(null);
 
     private IoRegistration ioRegistration;
     private int fd = -1;
@@ -123,7 +123,7 @@ public class IoUringFileIoHandle implements IoUringIoHandle {
 
         AsyncOpContext ctx = null;
         try {
-            ctx = contextRegistry.next(op);
+            ctx = contextRegistry.acquire(op);
             ctx.uringId = ioRegistration.submit(factory.apply(ctx));
             if (ctx.uringId == -1L) throw new IOException("io_uring submission failed (ring full?)");
             return ctx.future;
@@ -372,7 +372,7 @@ public class IoUringFileIoHandle implements IoUringIoHandle {
         Runnable closeRunnable = () -> {
             if (!stuckOpsCleanerTask.isDone()) stuckOpsCleanerTask.cancel(false);
             stuckOpsCleanerTask
-                .addListener( f -> submitCancelAll()
+                .addListener(f -> submitCancelAll()
                     .onComplete((res, err) ->
                         maybeSubmitClose()));
         };

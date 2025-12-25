@@ -1,8 +1,8 @@
 package io.jiouring.file;
 
 import io.netty.channel.unix.Errors;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.util.concurrent.locks.LockSupport;
@@ -10,7 +10,7 @@ import java.util.function.BiConsumer;
 
 public class SyscallFuture {
 
-    private static final Logger logger = LogManager.getLogger(SyscallFuture.class);
+    private static final Logger logger = LoggerFactory.getLogger(SyscallFuture.class);
 
     private volatile boolean done = false;
     private volatile Thread waiter = null;
