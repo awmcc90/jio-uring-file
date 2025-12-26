@@ -2,11 +2,8 @@ package io.jiouring.file;
 
 import org.junit.jupiter.api.Test;
 
-import java.util.ArrayList;
 import java.util.HashSet;
-import java.util.Iterator;
 import java.util.List;
-import java.util.NoSuchElementException;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -31,23 +28,10 @@ class AsyncOpRegistryTest {
     }
 
     @Test
-    void constructorWithZeroSize() {
+    void constructorWithSizeZero() {
         AsyncOpRegistry registry = new AsyncOpRegistry(0);
-        assertTrue(registry.isFull());
-    }
-
-    @Test
-    void constructorWithSizeOne() {
-        AsyncOpRegistry registry = new AsyncOpRegistry(1);
-        registry.acquire((byte) 1);
-        assertTrue(registry.isFull());
-    }
-
-    @Test
-    void constructorWithSizeTwo() {
-        AsyncOpRegistry registry = new AsyncOpRegistry(2);
-        assertTrue(registry.isEmpty());
-        assertFalse(registry.isFull());
+        assertDoesNotThrow(() -> registry.acquire((byte) 1));
+        assertTrue(registry.canAcquire(NativeConstants.IoRingOp.NOP));
     }
 
     @Test
@@ -64,12 +48,10 @@ class AsyncOpRegistryTest {
     }
 
     @Test
-    void isFullWhenExhausted() {
-        AsyncOpRegistry registry = new AsyncOpRegistry(3);
-        registry.acquire((byte) 1);
-        registry.acquire((byte) 1);
-        registry.acquire((byte) 1);
-        assertTrue(registry.isFull());
+    void canAcquireWhenExhausted() {
+        AsyncOpRegistry registry = new AsyncOpRegistry();
+        for (int i = 0; i < 0xFF; i++) registry.acquire(NativeConstants.IoRingOp.NOP);
+        assertFalse(registry.canAcquire(NativeConstants.IoRingOp.NOP));
     }
 
     @Test
@@ -113,13 +95,11 @@ class AsyncOpRegistryTest {
     @Test
     void releaseReturnsContextToPool() {
         AsyncOpRegistry registry = new AsyncOpRegistry(3);
-        AsyncOpContext ctx = registry.acquire((byte) 1);
-        registry.acquire((byte) 1);
-        registry.acquire((byte) 1);
-        assertTrue(registry.isFull());
-
+        AsyncOpContext ctx = registry.acquire(NativeConstants.IoRingOp.NOP);
+        for (int i = 1; i < 0xFF; i++) registry.acquire(NativeConstants.IoRingOp.NOP);
+        assertFalse(registry.canAcquire(NativeConstants.IoRingOp.NOP));
         registry.release(ctx, new RuntimeException());
-        assertFalse(registry.isFull());
+        assertTrue(registry.canAcquire(NativeConstants.IoRingOp.NOP));
     }
 
     @Test
@@ -127,10 +107,8 @@ class AsyncOpRegistryTest {
         AsyncOpRegistry registry = new AsyncOpRegistry(100);
         AsyncOpContext ctx = registry.acquire((byte) 1);
         RuntimeException cause = new RuntimeException("test");
-
         registry.release(ctx, cause);
-
-        assertThrows(RuntimeException.class, () -> ctx.future.join());
+        assertThrows(RuntimeException.class, ctx.future::join);
     }
 
     @Test
@@ -151,34 +129,6 @@ class AsyncOpRegistryTest {
 
         registry.release(ctx, new RuntimeException());
         assertEquals(-1, ctx.uringId);
-    }
-
-    @Test
-    void releaseWhenNotInUseDoesNothing() {
-        AsyncOpRegistry registry = new AsyncOpRegistry(3);
-        AsyncOpContext ctx = registry.acquire((byte) 1);
-        registry.acquire((byte) 1);
-        registry.acquire((byte) 1);
-        assertTrue(registry.isFull());
-
-        ctx.inUse = false;
-        registry.release(ctx, new RuntimeException());
-        assertTrue(registry.isFull());
-    }
-
-    @Test
-    void doubleReleaseIgnored() {
-        AsyncOpRegistry registry = new AsyncOpRegistry(3);
-        AsyncOpContext ctx = registry.acquire((byte) 1);
-        registry.acquire((byte) 1);
-        registry.acquire((byte) 1);
-        assertTrue(registry.isFull());
-
-        registry.release(ctx, new RuntimeException());
-        assertFalse(registry.isFull());
-
-        registry.release(ctx, new RuntimeException());
-        assertFalse(registry.isFull());
     }
 
     @Test

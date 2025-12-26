@@ -15,6 +15,11 @@ class AsyncOpContext {
         this.id = id;
     }
 
+    AsyncOpContext(byte op, short id) {
+        this(id);
+        reset(op);
+    }
+
     // NOTE: The order of the resets matters
     void reset(byte op) {
         this.op = op;

@@ -1,3 +1,30 @@
+## Usage
+
+### Run examples
+
+```bash
+mvn clean test-compile exec:java
+```
+
+### Run benchmark
+
+Put async profiler in `/opt/profiler` for the following to work
+
+```bash
+mvn clean verify \
+  -DskipTests \
+  -Pbenchmark \
+  -Djmh.args="-t 4 -prof gc -prof async:libPath=/opt/profiler/lib/libasyncProfiler.so;output=flamegraph"
+```
+
+### Run tests
+
+Can selectively run tests by adjusting the `-Dtest` arg
+
+```bash
+mvn clean test -Dtest="io.jiouring.file.*Test"
+```
+
 ## Benchmark
 
 ### Hardware

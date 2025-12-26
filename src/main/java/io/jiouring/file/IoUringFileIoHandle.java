@@ -115,9 +115,9 @@ public class IoUringFileIoHandle implements IoUringIoHandle {
             );
         }
 
-        if (contextRegistry.isFull()) {
+        if (!contextRegistry.canAcquire(op)) {
             return SyscallFuture.failed(
-                new IllegalStateException("Context registry is full")
+                new IllegalStateException("Context registry is full for " + op)
             );
         }
 
