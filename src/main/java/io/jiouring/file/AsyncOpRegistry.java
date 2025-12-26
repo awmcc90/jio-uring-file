@@ -42,9 +42,7 @@ class AsyncOpRegistry  {
     }
 
     void complete(IoUringIoEvent event) {
-        byte op = event.opcode();
-        short id = event.data();
-        int key = key(op, id);
+        int key = key(event.opcode(), event.data());
         AsyncOpContext ctx = contextLookup.get(key);
 
         if (ctx == null) {
@@ -87,7 +85,7 @@ class AsyncOpRegistry  {
     }
 
     private static final class OpIdPool {
-        private static final int MAX = 1 << 16;
+        private static final int SIZE = 1 << 16;
 
         private final short[] next = new short[56];
         private final BitSet[] inUse = new BitSet[56];
@@ -95,31 +93,31 @@ class AsyncOpRegistry  {
 
         private OpIdPool() {
             for (int i = 0; i < inUse.length; i++) {
-                inUse[i] = new BitSet(MAX);
+                inUse[i] = new BitSet(SIZE);
             }
         }
 
         private boolean canAcquire(byte op) {
-            return used[op] < MAX;
+            return used[op] < SIZE;
         }
 
         private short acquire(byte op) {
-            if (used[op] == MAX) {
+            if (used[op] == SIZE) {
                 throw new IllegalStateException("op " + op + " exhausted");
             }
 
             BitSet bs = inUse[op];
             int start = next[op] & 0xFFFF;
 
-            int id = bs.nextClearBit(start);
-            if (id >= MAX) {
-                id = bs.nextClearBit(0);
+            int idx = bs.nextClearBit(start);
+            if (idx >= SIZE) {
+                idx = bs.nextClearBit(0);
             }
 
-            bs.set(id);
+            bs.set(idx);
             used[op]++;
-            next[op] = (short) (id + 1);
-            return (short) id;
+            next[op] = (short) (idx + 1);
+            return (short) idx;
         }
 
         private void release(byte op, short id) {

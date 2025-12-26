@@ -92,31 +92,35 @@ public class IoUringFileIoHandle implements IoUringIoHandle {
 
     private SyscallFuture submit(byte op, Function<AsyncOpContext, IoUringIoOps> factory) {
         if (!ioEventLoop.inEventLoop()) {
-            SyscallFuture proxy = new SyscallFuture();
+            SyscallFuture proxy = new SyscallFuture(op);
             ioEventLoop.execute(() -> AsyncUtils.completeFrom(proxy, submit(op, factory)));
             return proxy;
         }
 
         if (!ioRegistration.isValid()) {
             return SyscallFuture.failed(
+                op,
                 new IllegalStateException("Registration is invalid")
             );
         }
 
         if (state == State.CLOSED) {
             return SyscallFuture.failed(
+                op,
                 new IOException("Handle is closed")
             );
         }
 
         if (state == State.CLOSING && !(op == NativeConstants.IoRingOp.CLOSE || op == NativeConstants.IoRingOp.ASYNC_CANCEL)) {
             return SyscallFuture.failed(
+                op,
                 new IOException("Handle is closing")
             );
         }
 
         if (!contextRegistry.canAcquire(op)) {
             return SyscallFuture.failed(
+                op,
                 new IllegalStateException("Context registry is full for " + op)
             );
         }
@@ -129,7 +133,7 @@ public class IoUringFileIoHandle implements IoUringIoHandle {
             return ctx.future;
         } catch (Throwable t) {
             if (ctx != null) contextRegistry.release(ctx, t);
-            return SyscallFuture.failed(t);
+            return SyscallFuture.failed(op, t);
         }
     }
 
@@ -137,7 +141,7 @@ public class IoUringFileIoHandle implements IoUringIoHandle {
         try {
             return submit(op, factory);
         } catch (Throwable t) {
-            return SyscallFuture.failed(t);
+            return SyscallFuture.failed(op, t);
         }
     }
 
@@ -265,7 +269,7 @@ public class IoUringFileIoHandle implements IoUringIoHandle {
             )
         );
 
-        SyscallFuture proxy = new SyscallFuture();
+        SyscallFuture proxy = new SyscallFuture(NativeConstants.IoRingOp.UNLINKAT);
         f.onComplete((res, err) -> {
             pathCStr.release();
             if (err != null) proxy.fail(err);
@@ -285,7 +289,7 @@ public class IoUringFileIoHandle implements IoUringIoHandle {
             )
         );
 
-        SyscallFuture proxy = new SyscallFuture();
+        SyscallFuture proxy = new SyscallFuture(NativeConstants.IoRingOp.STATX);
         f.onComplete((res, err) -> {
             pathCStr.release();
             if (err != null) proxy.fail(err);
@@ -306,7 +310,7 @@ public class IoUringFileIoHandle implements IoUringIoHandle {
     }
 
     private SyscallFuture submitCancelAll() {
-        if (contextRegistry.isEmpty()) return SyscallFuture.completed(0);
+        if (contextRegistry.isEmpty()) return SyscallFuture.completed(NativeConstants.IoRingOp.ASYNC_CANCEL, 0);
         return safeSubmit(NativeConstants.IoRingOp.ASYNC_CANCEL, ctx ->
             new IoUringIoOps(
                 ctx.op, (byte) 0, (byte) 0, fd,

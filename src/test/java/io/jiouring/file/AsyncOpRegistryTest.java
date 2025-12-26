@@ -23,11 +23,6 @@ class AsyncOpRegistryTest {
     }
 
     @Test
-    void constructorExceedingMaxThrows() {
-        assertThrows(IllegalArgumentException.class, () -> new AsyncOpRegistry(65537));
-    }
-
-    @Test
     void constructorWithSizeZero() {
         AsyncOpRegistry registry = new AsyncOpRegistry(0);
         assertDoesNotThrow(() -> registry.acquire((byte) 1));
@@ -50,7 +45,7 @@ class AsyncOpRegistryTest {
     @Test
     void canAcquireWhenExhausted() {
         AsyncOpRegistry registry = new AsyncOpRegistry();
-        for (int i = 0; i < 0xFF; i++) registry.acquire(NativeConstants.IoRingOp.NOP);
+        for (int i = 0; i <= 0xFFFF; i++) registry.acquire(NativeConstants.IoRingOp.NOP);
         assertFalse(registry.canAcquire(NativeConstants.IoRingOp.NOP));
     }
 
@@ -65,11 +60,9 @@ class AsyncOpRegistryTest {
 
     @Test
     void nextWhenFullThrows() {
-        AsyncOpRegistry registry = new AsyncOpRegistry(3);
-        registry.acquire((byte) 1);
-        registry.acquire((byte) 1);
-        registry.acquire((byte) 1);
-        assertThrows(IllegalStateException.class, () -> registry.acquire((byte) 1));
+        AsyncOpRegistry registry = new AsyncOpRegistry();
+        for (int i = 0; i <= 0xFFFF; i++) registry.acquire(NativeConstants.IoRingOp.NOP);
+        assertThrows(IllegalStateException.class, () -> registry.acquire(NativeConstants.IoRingOp.NOP));
     }
 
     @Test
@@ -93,16 +86,6 @@ class AsyncOpRegistryTest {
     }
 
     @Test
-    void releaseReturnsContextToPool() {
-        AsyncOpRegistry registry = new AsyncOpRegistry(3);
-        AsyncOpContext ctx = registry.acquire(NativeConstants.IoRingOp.NOP);
-        for (int i = 1; i < 0xFF; i++) registry.acquire(NativeConstants.IoRingOp.NOP);
-        assertFalse(registry.canAcquire(NativeConstants.IoRingOp.NOP));
-        registry.release(ctx, new RuntimeException());
-        assertTrue(registry.canAcquire(NativeConstants.IoRingOp.NOP));
-    }
-
-    @Test
     void releaseFailsFuture() {
         AsyncOpRegistry registry = new AsyncOpRegistry(100);
         AsyncOpContext ctx = registry.acquire((byte) 1);
@@ -119,16 +102,6 @@ class AsyncOpRegistryTest {
 
         registry.release(ctx, new RuntimeException());
         assertFalse(ctx.inUse);
-    }
-
-    @Test
-    void releaseResetsUringId() {
-        AsyncOpRegistry registry = new AsyncOpRegistry(100);
-        AsyncOpContext ctx = registry.acquire((byte) 1);
-        ctx.uringId = 999L;
-
-        registry.release(ctx, new RuntimeException());
-        assertEquals(-1, ctx.uringId);
     }
 
     @Test
@@ -183,12 +156,5 @@ class AsyncOpRegistryTest {
         assertEquals(2, stuck.size());
         assertTrue(stuck.contains(ctx1));
         assertTrue(stuck.contains(ctx2));
-    }
-
-    @Test
-    void idMappingUsesShortMinValue() {
-        AsyncOpRegistry registry = new AsyncOpRegistry(10);
-        AsyncOpContext ctx = registry.acquire((byte) 1);
-        assertTrue(ctx.id < Short.MIN_VALUE + 10);
     }
 }

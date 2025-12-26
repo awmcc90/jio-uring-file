@@ -1,12 +1,12 @@
 package io.jiouring.file;
 
 import io.netty.channel.unix.Errors;
+import it.unimi.dsi.fastutil.ints.IntObjectBiConsumer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.util.concurrent.locks.LockSupport;
-import java.util.function.BiConsumer;
 
 public class SyscallFuture {
 
@@ -14,27 +14,17 @@ public class SyscallFuture {
 
     private volatile boolean done = false;
     private volatile Thread waiter = null;
-    private volatile BiConsumer<Integer, Throwable> completionHandler = null;
+    private volatile IntThrowableBiConsumer completionHandler = null;
 
-    private byte op = 0;
+    private final byte op;
     private int result = 0;
     private Throwable exception = null;
 
-    /**
-     * Resets the future for reuse in a pool.
-     * NOTE: This is not thread-safe and must be called by the owning thread
-     * only when the future is known to be free.
-     */
-    void reset(byte op) {
+    SyscallFuture(byte op) {
         this.op = op;
-        this.result = 0;
-        this.exception = null;
-        this.waiter = null;
-        this.completionHandler = null;
-        this.done = false;
     }
 
-    public void onComplete(BiConsumer<Integer, Throwable> handler) {
+    public void onComplete(IntThrowableBiConsumer handler) {
         boolean runImmediately = false;
 
         synchronized (this) {
@@ -54,7 +44,7 @@ public class SyscallFuture {
     }
 
      void complete(int res) {
-        BiConsumer<Integer, Throwable> handlerToRun;
+        IntThrowableBiConsumer handlerToRun;
         Thread waiterToUnpark;
         Throwable computedException = null;
 
@@ -92,7 +82,7 @@ public class SyscallFuture {
     }
 
     void fail(Throwable cause) {
-        BiConsumer<Integer, Throwable> handlerToRun;
+        IntThrowableBiConsumer handlerToRun;
         Thread waiterToUnpark;
 
         synchronized (this) {
@@ -141,7 +131,7 @@ public class SyscallFuture {
         return this.result;
     }
 
-    private static void safeInvokeHandler(BiConsumer<Integer, Throwable> handler, int res, Throwable ex) {
+    private static void safeInvokeHandler(IntThrowableBiConsumer handler, int res, Throwable ex) {
         try {
             handler.accept(res, ex);
         } catch (Throwable t) {
@@ -149,19 +139,17 @@ public class SyscallFuture {
         }
     }
 
-    static SyscallFuture completed(int res) {
-        SyscallFuture f = new SyscallFuture();
+    static SyscallFuture completed(byte op, int res) {
+        SyscallFuture f = new SyscallFuture(op);
         f.complete(res);
         return f;
     }
 
-    static SyscallFuture completed() {
-        return completed(0);
-    }
-
-    static SyscallFuture failed(Throwable cause) {
-        SyscallFuture f = new SyscallFuture();
+    static SyscallFuture failed(byte op, Throwable cause) {
+        SyscallFuture f = new SyscallFuture(op);
         f.fail(cause);
         return f;
     }
+
+    public interface IntThrowableBiConsumer extends IntObjectBiConsumer<Throwable> {}
 }
