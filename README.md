@@ -3,7 +3,7 @@
 ### Run examples
 
 ```bash
-mvn clean test-compile exec:java
+mvn clean test-compile exec:exec -Pexamples
 ```
 
 ### Run benchmark
@@ -11,9 +11,9 @@ mvn clean test-compile exec:java
 Put async profiler in `/opt/profiler` for the following to work
 
 ```bash
-mvn clean verify \
-  -DskipTests \
+mvn clean test-compile exec:exec \
   -Pbenchmark \
+  -DskipTests \
   -Djmh.args="-t 4 -prof gc -prof async:libPath=/opt/profiler/lib/libasyncProfiler.so;output=flamegraph"
 ```
 

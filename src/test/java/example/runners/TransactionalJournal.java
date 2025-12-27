@@ -16,11 +16,16 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicLong;
 
-public class TransactionalJournal {
+public class TransactionalJournal implements Runnable {
 
     private static final Logger logger = LogManager.getLogger(TransactionalJournal.class);
 
-    public static CompletableFuture<Void> run() {
+    @Override
+    public void run() {
+        runAsync().join();
+    }
+
+    private static CompletableFuture<Void> runAsync() {
         MultiThreadIoEventLoopGroup group = new MultiThreadIoEventLoopGroup(1, IoUringIoHandler.newFactory());
         IoEventLoop loop = group.next();
 
@@ -32,28 +37,28 @@ public class TransactionalJournal {
 
         CompletableFuture<Void> promise = new CompletableFuture<>();
 
-        IoUringFile.createTempFile(loop)
-            .thenCompose(file ->
-                CompletableFuture.runAsync(() -> {
-                        try {
-                            runInternal(file).join();
-                        } catch (Throwable t) {
-                            throw new RuntimeException(t);
-                        }
-                    }, worker)
-                    .handle((res, err) -> file.closeAsync()
-                        .handle((closeRes, closeErr) -> {
-                            Throwable finalErr = err != null ? err : closeErr;
-                            shutdown(group, worker, promise, finalErr);
-                            return null;
-                        }))
-                    .thenApply(x -> null)
-            )
-            .exceptionally(t -> {
-                logger.error("Failed to create temp file", t);
-                shutdown(group, worker, promise, t);
-                return null;
+        IoUringFile
+            .createTempFile(loop)
+            .whenComplete((file, err) -> {
+                if (err != null) promise.completeExceptionally(err);
+                else {
+                    worker.submit(() -> runInternal(file, promise));
+                    promise
+                        .whenComplete((ignored1, t) -> file
+                            .closeAsync()
+                            .whenComplete((ignored2, tt) -> {
+                                Throwable finalErr = t != null ? t : tt;
+                                shutdown(group, worker, promise, finalErr);
+                            }));
+                }
             });
+
+
+        promise.exceptionally(t -> {
+            logger.error("Failed to create temp file", t);
+            shutdown(group, worker, promise, t);
+            return null;
+        });
 
         return promise;
     }
@@ -76,7 +81,7 @@ public class TransactionalJournal {
         });
     }
 
-    private static CompletableFuture<Void> runInternal(IoUringFile file) {
+    private static CompletableFuture<Void> runInternal(IoUringFile file, CompletableFuture<Void> promise) {
         long totalRecords = 100 * 1024 * 1024;
         long logBatch = 40 * 1024;
         int recordSize = 128;
@@ -88,7 +93,6 @@ public class TransactionalJournal {
         int maxInFlightBatches = 4096;
 
         AtomicLong completedBatches = new AtomicLong(0);
-        CompletableFuture<Void> finishedPromise = new CompletableFuture<>();
         Semaphore backpressure = new Semaphore(maxInFlightBatches);
 
         logger.info("Writing {} transactions in {} batches ({} bytes per write)...",
@@ -111,42 +115,34 @@ public class TransactionalJournal {
                     buffer.writeZero(recordSize - 24); // Padding
                 }
 
-                file.writeAsync(buffer, fileOffset)
+                file
+                    .writeAsync(buffer, fileOffset)
                     .handle((res, err) -> {
                         backpressure.release();
 
-                        if (err != null) {
-                            finishedPromise.completeExceptionally(err);
-                        } else {
+                        if (err != null) promise.completeExceptionally(err);
+                        else {
                             long c = completedBatches.incrementAndGet();
-
                             if (c % logBatch == 0L) {
                                 long progress = c * recordsPerBatch;
                                 logger.info("Progress: {} / {} records", progress, actualTotalRecords);
                             }
-
-                            if (c == totalBatches) {
-                                finishedPromise.complete(null);
-                            }
+                            if (c == totalBatches) promise.complete(null);
                         }
                         return null;
                     });
 
                 buffer.release();
             }
-
-            finishedPromise.join();
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            finishedPromise.completeExceptionally(e);
-        } catch (Throwable t) {
-            finishedPromise.completeExceptionally(t);
+            promise.completeExceptionally(e);
         }
 
-        long endTime = System.currentTimeMillis();
-        long timeTaken = endTime - startTime;
+        return promise.thenAccept(res -> {
+            long endTime = System.currentTimeMillis();
+            long timeTaken = endTime - startTime;
 
-        return file.fsync().thenAccept(v -> {
             long bytesWritten = actualTotalRecords * recordSize;
             long mb = bytesWritten / (1024 * 1024);
             long throughput = timeTaken > 0 ? (mb * 1000) / timeTaken : 0;
@@ -157,6 +153,8 @@ public class TransactionalJournal {
             logger.info("Total Size:  {} MB", mb);
             logger.info("Throughput:  {} MB/s", throughput);
             logger.info("-------------------------");
-        });
+        })
+        .thenCompose(ignored -> file.fsync())
+        .thenAccept(ignored -> {});
     }
 }

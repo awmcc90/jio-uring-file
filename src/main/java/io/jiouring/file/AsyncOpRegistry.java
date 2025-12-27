@@ -91,12 +91,6 @@ class AsyncOpRegistry  {
         private final BitSet[] inUse = new BitSet[56];
         private final int[] used = new int[56];
 
-        private OpIdPool() {
-            for (int i = 0; i < inUse.length; i++) {
-                inUse[i] = new BitSet(SIZE);
-            }
-        }
-
         private boolean canAcquire(byte op) {
             return used[op] < SIZE;
         }
@@ -107,6 +101,12 @@ class AsyncOpRegistry  {
             }
 
             BitSet bs = inUse[op];
+
+            // Lazy load these because memory
+            if (bs == null) {
+                bs = inUse[op] = new BitSet(SIZE);
+            }
+
             int start = next[op] & 0xFFFF;
 
             int idx = bs.nextClearBit(start);

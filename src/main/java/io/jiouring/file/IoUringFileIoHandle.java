@@ -67,6 +67,10 @@ public class IoUringFileIoHandle implements IoUringIoHandle {
         );
     }
 
+    public boolean canWrite() {
+        return contextRegistry.canAcquire(NativeConstants.IoRingOp.WRITE);
+    }
+
     public IoUringFileIoHandle init(IoRegistration ioRegistration) {
         if (!ioRegistration.isValid()) {
             throw new IllegalStateException("IoRegistration is not valid");
@@ -91,12 +95,6 @@ public class IoUringFileIoHandle implements IoUringIoHandle {
     }
 
     private SyscallFuture submit(byte op, Function<AsyncOpContext, IoUringIoOps> factory) {
-        if (!ioEventLoop.inEventLoop()) {
-            SyscallFuture proxy = new SyscallFuture(op);
-            ioEventLoop.execute(() -> AsyncUtils.completeFrom(proxy, submit(op, factory)));
-            return proxy;
-        }
-
         if (!ioRegistration.isValid()) {
             return SyscallFuture.failed(
                 op,
@@ -104,10 +102,10 @@ public class IoUringFileIoHandle implements IoUringIoHandle {
             );
         }
 
-        if (state == State.CLOSED) {
+        if (state == State.FAILED || state == State.CLOSED) {
             return SyscallFuture.failed(
                 op,
-                new IOException("Handle is closed")
+                new IOException("Handle is in terminal state: " + state)
             );
         }
 
@@ -139,6 +137,12 @@ public class IoUringFileIoHandle implements IoUringIoHandle {
 
     private SyscallFuture safeSubmit(byte op, Function<AsyncOpContext, IoUringIoOps> factory) {
         try {
+            if (!ioEventLoop.inEventLoop()) {
+                SyscallFuture proxy = new SyscallFuture(op);
+                ioEventLoop.execute(() -> AsyncUtils.completeFrom(proxy, safeSubmit(op, factory)));
+                return proxy;
+            }
+
             return submit(op, factory);
         } catch (Throwable t) {
             return SyscallFuture.failed(op, t);
@@ -169,8 +173,6 @@ public class IoUringFileIoHandle implements IoUringIoHandle {
         f.onComplete((res, err) -> {
             if (err != null) {
                 state = State.FAILED;
-                logger.warn("Failed to initialize. Cleaning up...");
-
                 // We only have to cancel the registration. There can't be any other ops in flight right now
                 // because the openFuture hasn't completed.
                 ioRegistration.cancel();
@@ -356,7 +358,7 @@ public class IoUringFileIoHandle implements IoUringIoHandle {
 
     public CompletableFuture<Integer> closeAsync() {
         if (state == State.FAILED || state == State.CLOSED) {
-            logger.warn("Close called on handle in state {}", state);
+            logger.debug("Close called on handle in state {}", state);
             return CompletableFuture.completedFuture(0);
         }
 

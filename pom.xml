@@ -28,6 +28,7 @@
         <junit.version>5.10.1</junit.version>
         <jmh.version>1.37</jmh.version>
         <disruptor.version>4.0.0</disruptor.version>
+        <vertx.version>5.0.6</vertx.version>
     </properties>
 
     <dependencies>
@@ -105,26 +106,17 @@
             <version>${jmh.version}</version>
             <scope>test</scope>
         </dependency>
+
+        <dependency>
+            <groupId>io.vertx</groupId>
+            <artifactId>vertx-core</artifactId>
+            <version>${vertx.version}</version>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>
         <plugins>
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-compiler-plugin</artifactId>
-                <version>3.11.0</version>
-                <configuration>
-                    <release>${maven.compiler.release}</release>
-                    <annotationProcessorPaths>
-                        <path>
-                            <groupId>org.openjdk.jmh</groupId>
-                            <artifactId>jmh-generator-annprocess</artifactId>
-                            <version>${jmh.version}</version>
-                        </path>
-                    </annotationProcessorPaths>
-                </configuration>
-            </plugin>
-
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
@@ -175,30 +167,87 @@
             </plugin>
 
             <plugin>
-                <groupId>org.codehaus.mojo</groupId>
-                <artifactId>exec-maven-plugin</artifactId>
-                <version>3.1.1</version>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.11.0</version>
+                <executions>
+                    <execution>
+                        <id>default-compile</id>
+                        <phase>none</phase>
+                    </execution>
+                    <execution>
+                        <id>default-testCompile</id>
+                        <phase>none</phase>
+                    </execution>
+                    <execution>
+                        <id>compile</id>
+                        <phase>compile</phase>
+                        <goals>
+                            <goal>compile</goal>
+                        </goals>
+                    </execution>
+                    <execution>
+                        <id>testCompile</id>
+                        <phase>test-compile</phase>
+                        <goals>
+                            <goal>testCompile</goal>
+                        </goals>
+                    </execution>
+                </executions>
                 <configuration>
-                    <mainClass>example.Main</mainClass>
-                    <classpathScope>test</classpathScope>
-                    <systemProperties>
-                        <systemProperty>
-                            <key>io.netty.iouring.ringSize</key>
-                            <value>32768</value>
-                        </systemProperty>
-                    </systemProperties>
-                    <arguments>
-                        <argument>--add-opens=java.base/jdk.internal.misc=ALL-UNNAMED</argument>
-                        <argument>--add-opens=java.base/sun.nio.ch=ALL-UNNAMED</argument>
-                        <argument>--add-opens=java.base/java.nio=ALL-UNNAMED</argument>
-                        <argument>--enable-native-access=ALL-UNNAMED</argument>
-                    </arguments>
+                    <release>${maven.compiler.release}</release>
+                    <annotationProcessorPaths>
+                        <path>
+                            <groupId>org.openjdk.jmh</groupId>
+                            <artifactId>jmh-generator-annprocess</artifactId>
+                            <version>${jmh.version}</version>
+                        </path>
+                    </annotationProcessorPaths>
                 </configuration>
             </plugin>
         </plugins>
     </build>
 
     <profiles>
+        <profile>
+            <id>examples</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.codehaus.mojo</groupId>
+                        <artifactId>exec-maven-plugin</artifactId>
+                        <version>3.6.3</version>
+                        <configuration>
+                            <executable>java</executable>
+                            <classpathScope>test</classpathScope>
+
+                            <arguments>
+                                <argument>--add-opens=java.base/jdk.internal.misc=ALL-UNNAMED</argument>
+                                <argument>--add-opens=java.base/sun.nio.ch=ALL-UNNAMED</argument>
+                                <argument>--add-opens=java.base/java.nio=ALL-UNNAMED</argument>
+                                <argument>--enable-native-access=ALL-UNNAMED</argument>
+
+                                <argument>-Xms1G</argument>
+                                <argument>-Xmx1G</argument>
+                                <argument>-XX:+AlwaysPreTouch</argument>
+                                <argument>-XX:+UseParallelGC</argument>
+                                <argument>-XX:MaxDirectMemorySize=2G</argument>
+
+                                <argument>-Dio.netty.tryReflectionSetAccessible=true</argument>
+                                <argument>-Dio.netty.iouring.ringSize=4096</argument>
+                                <argument>-Dio.netty.noUnsafe=false</argument>
+                                <argument>-Dlog4j2.contextSelector=org.apache.logging.log4j.core.async.AsyncLoggerContextSelector</argument>
+
+                                <argument>-classpath</argument>
+                                <classpath/>
+                                <argument>example.Main</argument>
+                            </arguments>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+
         <profile>
             <id>benchmark</id>
             <properties>
@@ -209,36 +258,29 @@
                     <plugin>
                         <groupId>org.codehaus.mojo</groupId>
                         <artifactId>exec-maven-plugin</artifactId>
-                        <version>3.1.1</version>
-                        <executions>
-                            <execution>
-                                <id>run-benchmarks</id>
-                                <phase>integration-test</phase>
-                                <goals>
-                                    <goal>exec</goal>
-                                </goals>
-                                <configuration>
-                                    <classpathScope>test</classpathScope>
-                                    <executable>java</executable>
-                                    <commandlineArgs>
-                                        -classpath %classpath
-                                        --add-opens=java.base/jdk.internal.misc=ALL-UNNAMED
-                                        --add-opens=java.base/sun.nio.ch=ALL-UNNAMED
-                                        --add-opens=java.base/java.nio=ALL-UNNAMED
-                                        --enable-native-access=ALL-UNNAMED
-                                        -Xms1G -Xmx1G
-                                        -XX:+AlwaysPreTouch
-                                        -XX:MaxDirectMemorySize=2G
-                                        -Dio.netty.tryReflectionSetAccessible=true
-                                        -Dio.netty.iouring.ringSize=4096
-                                        -Dio.netty.noUnsafe=false
-                                        -Dlog4j2.contextSelector=org.apache.logging.log4j.core.async.AsyncLoggerContextSelector
-                                        org.openjdk.jmh.Main
-                                        ${jmh.args}
-                                    </commandlineArgs>
-                                </configuration>
-                            </execution>
-                        </executions>
+                        <version>3.6.3</version>
+                        <configuration>
+                            <executable>java</executable>
+                            <classpathScope>test</classpathScope>
+
+                            <commandlineArgs>
+                                --add-opens=java.base/jdk.internal.misc=ALL-UNNAMED
+                                --add-opens=java.base/sun.nio.ch=ALL-UNNAMED
+                                --add-opens=java.base/java.nio=ALL-UNNAMED
+                                --enable-native-access=ALL-UNNAMED
+                                -Xms1G
+                                -Xmx1G
+                                -XX:+AlwaysPreTouch
+                                -XX:MaxDirectMemorySize=2G
+                                -Dio.netty.tryReflectionSetAccessible=true
+                                -Dio.netty.iouring.ringSize=4096
+                                -Dio.netty.noUnsafe=false
+                                -Dlog4j2.contextSelector=org.apache.logging.log4j.core.async.AsyncLoggerContextSelector
+                                -classpath %classpath
+                                org.openjdk.jmh.Main
+                                ${jmh.args}
+                            </commandlineArgs>
+                        </configuration>
                     </plugin>
                 </plugins>
             </build>
