@@ -1,20 +1,22 @@
 package io.jiouring.file;
 
+import io.netty.util.concurrent.EventExecutor;
+
 class AsyncOpContext {
     final byte op;
     final short id;
     final long startTime;
 
-    final SyscallFuture future;
+    final NettySyscallFuture future;
 
     volatile boolean inUse = true;
     volatile long uringId = -1;
 
-    AsyncOpContext(byte op, short id) {
+    AsyncOpContext(EventExecutor executor, byte op, short id) {
         this.op = op;
         this.id = id;
         this.startTime = System.nanoTime();
-        this.future = new SyscallFuture(op);
+        this.future = new NettySyscallFuture(executor, op);
     }
 
     @Override

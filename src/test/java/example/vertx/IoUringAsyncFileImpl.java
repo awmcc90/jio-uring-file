@@ -9,6 +9,7 @@ import io.vertx.core.Future;
 import io.vertx.core.Handler;
 import io.vertx.core.Promise;
 import io.vertx.core.buffer.Buffer;
+import io.vertx.core.buffer.impl.BufferImpl;
 import io.vertx.core.file.AsyncFile;
 import io.vertx.core.file.AsyncFileLock;
 import io.vertx.core.file.FileSystemException;
@@ -64,7 +65,7 @@ public class IoUringAsyncFileImpl implements AsyncFile {
         });
         this.queue.drainHandler(v -> doRead());
 
-        // Don't want to do this but don't have an alternative...
+        // Don't want to do this but don't know of an alternative...
         this.lockChannel = vertx.executeBlocking(() -> {
             try {
                 return AsynchronousFileChannel.open(
@@ -73,7 +74,8 @@ public class IoUringAsyncFileImpl implements AsyncFile {
                     java.nio.file.StandardOpenOption.WRITE
                 );
             } catch (IOException e) {
-                throw new FileSystemException(e);
+                //throw new FileSystemException(e);
+                return null;
             }
         });
     }
@@ -145,26 +147,42 @@ public class IoUringAsyncFileImpl implements AsyncFile {
 
         readInProgress = true;
 
-        ByteBuf buf = PooledByteBufAllocator.DEFAULT.directBuffer(toRead);
+        ByteBuf bb = PooledByteBufAllocator.DEFAULT.buffer(toRead);
+        io.netty.util.concurrent.Future<Integer> readFuture;
 
-        handle
-            .readAsync(buf, readPos)
-            .onComplete((res, err) -> {
+        try {
+            readFuture = handle.readAsync(bb, readPos);
+        } catch (Throwable t) {
+            bb.release();
+            readInProgress = false;
+            handleException(t);
+            return;
+        }
+
+        readFuture
+            .addListener((f) -> {
                 readInProgress = false;
 
-                if (err != null) {
-                    buf.release();
-                    handleException(err);
+                if (!f.isSuccess()) {
+                    bb.release();
+                    handleException(f.cause());
                     return;
                 }
 
-                assert res >= 0;
+                int res = (int) f.getNow();
 
-                buf.writerIndex(res);
-                readPos += res;
-                readLength -= res;
+                BufferInternal buf;
+                try {
+                    bb.writerIndex(bb.writerIndex() + res);
+                    readPos += res;
+                    readLength -= res;
 
-                if (queue.write(BufferInternal.buffer(buf))) {
+                    buf = BufferInternal.safeBuffer(bb);
+                } finally {
+                    if (bb.refCnt() > 0) bb.release();
+                }
+
+                if (queue.write(buf) && buf.length() > 0) {
                     doRead();
                 }
             });
@@ -190,15 +208,12 @@ public class IoUringAsyncFileImpl implements AsyncFile {
         }
     }
 
-    // ==========================================================
-    // WriteStream Implementation
-    // ==========================================================
-
     @Override
     public Future<Void> write(Buffer buffer) {
         Promise<Void> p = context.promise();
         int length = buffer.length();
-        doWrite(buffer, writePos, p).onSuccess(v -> writePos += length);
+        doWrite(buffer, writePos, p);
+        writePos += length;
         return p.future();
     }
 
@@ -213,24 +228,75 @@ public class IoUringAsyncFileImpl implements AsyncFile {
         checkContext();
         checkClosed();
 
-        ByteBuf buf = ((BufferInternal) buffer).getByteBuf();
-        int length = buf.readableBytes();
+        final ByteBuf bb;
+        final boolean needsRelease;
+        if (buffer instanceof BufferImpl bufferImpl && bufferImpl.byteBuf().isDirect()) {
+            bb = bufferImpl.byteBuf();
+            needsRelease = false;
+        } else {
+            bb = PooledByteBufAllocator.DEFAULT.buffer(buffer.length());
+            // Might be able to copy efficiently
+            if (buffer instanceof BufferInternal bufferInternal) {
+                bb.writeBytes(bufferInternal.getByteBuf());
+            } else {
+                // And also might not -_-
+                bb.writeBytes(buffer.getBytes());
+            }
+            needsRelease = true;
+        }
+
+        int length = bb.readableBytes();
 
         writesOutstandingBytes += length;
         boolean wasFull = writeQueueFull();
 
-        handle
-            .writeAsync(buf, position, false)
-            .onComplete((res, err) -> {
-                writesOutstandingBytes -= length;
+        io.netty.util.concurrent.Future<Integer> writeFuture;
+        try {
+            writeFuture = handle.writeAsync(bb, position, false);
+        } catch (Throwable t) {
+            if (needsRelease) bb.release();
+            writesOutstandingBytes -= length;
+            promise.fail(t);
+            return promise.future();
+        }
 
-                if (err != null) {
-                    promise.fail(err);
-                } else {
-                    if (wasFull && !writeQueueFull() && drainHandler != null) {
-                        drainHandler.handle(null);
+        writeFuture
+            .addListener((f) -> {
+                if (!f.isSuccess()) {
+                    if (needsRelease) bb.release();
+                    writesOutstandingBytes -= length;
+                    promise.fail(f.cause());
+                    return;
+                }
+
+                int res = (int) f.getNow();
+                bb.readerIndex(bb.readerIndex() + res);
+                writesOutstandingBytes -= res;
+
+                // Partial write
+                if (bb.readableBytes() > 0) {
+                    // Take the remaining readable slice, which is just a view of the underlying ByteBuf (backed by the
+                    // original) and re-submit that portion. Key point here: if we created the ByteBuf in this method,
+                    // we are always on the hook for releasing it, which we do in the onComplete.
+                    try {
+                        ByteBuf readableSlice = bb.slice(bb.readerIndex(), bb.readableBytes());
+                        doWrite(BufferInternal.buffer(readableSlice), position + res, promise)
+                            .onComplete(ar -> {
+                                if (needsRelease) bb.release();
+                            });
+                    } catch (Throwable t) {
+                        if (needsRelease && bb.refCnt() > 0) bb.release();
+                        promise.tryFail(t);
                     }
-                    promise.complete();
+                } else {
+                    try {
+                        if (wasFull && !writeQueueFull() && drainHandler != null) {
+                            drainHandler.handle(null);
+                        }
+                        promise.tryComplete();
+                    } catch (Throwable t) {
+                        promise.tryFail(t);
+                    }
                 }
             });
 
@@ -277,36 +343,61 @@ public class IoUringAsyncFileImpl implements AsyncFile {
         checkContext();
         checkClosed();
 
-        Promise<Buffer> p = context.promise();
-        ByteBuf slice = getByteBuf((BufferInternal) buffer, offset, length);
+        ByteBuf bb;
+        ByteBuf slice;
+        final boolean needsRelease;
+        if (buffer instanceof BufferImpl bufferImpl && bufferImpl.byteBuf().isDirect()) {
+            bb = bufferImpl.byteBuf();
+            slice = bb.slice(offset, length);
+            slice.writerIndex(0);
+            needsRelease = false;
+        } else {
+            // -_-
+            bb = slice = PooledByteBufAllocator.DEFAULT.buffer(length);
+            needsRelease = true;
+        }
+
+        Promise<Buffer> promise = context.promise();
 
         handle
             .readAsync(slice, position)
-            .onComplete((bytesRead, err) -> {
-                if (err != null) {
-                    p.fail(err);
+            .addListener((f) -> {
+                if (!f.isSuccess()) {
+                    if (needsRelease) bb.release();
+                    promise.fail(f.cause());
                     return;
                 }
 
-                // Update the original buffer's writer index if necessary,
-                // or assume the user manages the "valid" part of the buffer manually.
-                // Vert.x contract usually implies the buffer is filled.
-                // We set the writer index of the slice, which modifies underlying memory.
-                // But we must update the main buffer writerIndex if we appended?
-                // The API says "written into specified Buffer at position offset".
-                // It does not explicitly say it appends.
+                int res = (int) f.getNow();
 
-                p.complete(buffer);
+                if (bb != slice) {
+                    // Zero-copy path, update the write index to offset + whatever we wrote.
+                    bb.writerIndex(offset + res);
+                } else {
+                    // Copy path. Update indices and write.
+                    try {
+                        bb.writerIndex(bb.writerIndex() + res);
+                        buffer.setBuffer(offset, BufferInternal.buffer(bb));
+                    } finally {
+                        bb.release();
+                    }
+                }
+
+                int remaining = length - res;
+
+                // Partial read
+                if (remaining > 0) {
+                    read(buffer, offset + res, position + res, remaining)
+                        .onComplete(ar -> {
+                            if (ar.failed()) promise.fail(ar.cause());
+                            else promise.complete();
+                        });
+                } else {
+                    promise.complete(buffer);
+                }
             });
 
-        return p.future();
-    }
-
-    private static ByteBuf getByteBuf(BufferInternal buffer, int offset, int length) {
-        ByteBuf buf = buffer.getByteBuf();
-        ByteBuf slice = buf.slice(offset, length);
-        slice.writerIndex(0);
-        return slice;
+        return promise.future();
     }
 
     @Override
@@ -318,17 +409,13 @@ public class IoUringAsyncFileImpl implements AsyncFile {
 
         handle
             .fsyncAsync(false, 0, 0)
-            .onComplete((res, err) -> {
-                if (err != null) p.fail(err);
+            .addListener((f) -> {
+                if (!f.isSuccess()) p.fail(f.cause());
                 else p.complete();
             });
 
         return p.future();
     }
-
-    // ==========================================================
-    // Getters / Setters
-    // ==========================================================
 
     @Override
     public AsyncFile setReadPos(long readPos) {
@@ -384,10 +471,10 @@ public class IoUringAsyncFileImpl implements AsyncFile {
         ByteBuf statBuffer = Unpooled.directBuffer(256);
         handle
             .statxAsync(NativeConstants.StatxMask.SIZE, 0, statBuffer)
-            .onComplete((res, err) -> {
-                if (err != null) {
+            .addListener((f) -> {
+                if (!f.isSuccess()) {
                     statBuffer.release();
-                    p.fail(err);
+                    p.fail(f.cause());
                 } else {
                     long size = statBuffer.getLong(0x28);
                     statBuffer.release();
@@ -451,8 +538,8 @@ public class IoUringAsyncFileImpl implements AsyncFile {
         Promise<Void> closeHandlePromise = context.promise();
         handle
             .closeAsync()
-            .whenComplete((res, err) -> context.runOnContext(v -> {
-                if (err != null) closeHandlePromise.fail(err);
+            .addListener((closeFuture) -> context.runOnContext(v -> {
+                if (!closeFuture.isSuccess()) closeHandlePromise.fail(closeFuture.cause());
                 else closeHandlePromise.complete();
             }));
 
@@ -463,7 +550,9 @@ public class IoUringAsyncFileImpl implements AsyncFile {
                 else {
                     context
                         .executeBlockingInternal(() -> {
-                            ar.result().close();
+                            if (ar.result() != null) {
+                                ar.result().close();
+                            }
                             return null;
                         })
                         .onComplete(ar2 -> {

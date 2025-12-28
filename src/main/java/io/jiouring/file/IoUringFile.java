@@ -33,11 +33,12 @@ public class IoUringFile implements AutoCloseable {
         ensureBuffer(byteBuf, true);
         CompletableFuture<Integer> promise = new UncancellableFuture<>();
         ioUringIoHandle.readAsync(byteBuf.retain(), offset)
-            .onComplete((res, err) -> {
+            .addListener((f) -> {
                 try {
-                    if (err != null) {
-                        promise.completeExceptionally(err);
+                    if (!f.isSuccess()) {
+                        promise.completeExceptionally(f.cause());
                     } else {
+                        int res = (int) f.get();
                         byteBuf.writerIndex(byteBuf.writerIndex() + res);
                         promise.complete(res);
                     }
@@ -56,12 +57,13 @@ public class IoUringFile implements AutoCloseable {
         IovArray iovArray = createSafeIovArray(buffers, true);
 
         ioUringIoHandle.readvAsync(iovArray, offset)
-            .onComplete((res, err) -> {
+            .addListener((f) -> {
                 try {
                     iovArray.release();
-                    if (err != null) {
-                        promise.completeExceptionally(err);
+                    if (!f.isSuccess()) {
+                        promise.completeExceptionally(f.cause());
                     } else {
+                        int res = (int) f.get();
                         progressBuffers(buffers, res, true);
                         promise.complete(res);
                     }
@@ -82,11 +84,12 @@ public class IoUringFile implements AutoCloseable {
         CompletableFuture<Integer> promise = new UncancellableFuture<>();
 
         ioUringIoHandle.writeAsync(byteBuf.retain(), offset, dsync)
-            .onComplete((res, err) -> {
+            .addListener((f) -> {
                 try {
-                    if (err != null) {
-                        promise.completeExceptionally(err);
+                    if (!f.isSuccess()) {
+                        promise.completeExceptionally(f.cause());
                     } else {
+                        int res = (int) f.get();
                         byteBuf.readerIndex(byteBuf.readerIndex() + res);
                         promise.complete(res);
                     }
@@ -110,12 +113,13 @@ public class IoUringFile implements AutoCloseable {
         IovArray iovArray = createSafeIovArray(buffers, false);
 
         ioUringIoHandle.writevAsync(iovArray, offset)
-            .onComplete((res, err) -> {
+            .addListener((f) -> {
                 try {
                     iovArray.release();
-                    if (err != null) {
-                        promise.completeExceptionally(err);
+                    if (!f.isSuccess()) {
+                        promise.completeExceptionally(f.cause());
                     } else {
+                        int res = (int) f.get();
                         progressBuffers(buffers, res, false);
                         promise.complete(res);
                     }
@@ -173,8 +177,8 @@ public class IoUringFile implements AutoCloseable {
             AsyncUtils.completeFrom(promise, closeAsync());
         } else {
             ioUringIoHandle.unlinkAsync()
-                .onComplete((res, err) -> {
-                    if (err != null) promise.completeExceptionally(err);
+                .addListener((f) -> {
+                    if (!f.isSuccess()) promise.completeExceptionally(f.cause());
                     else AsyncUtils.completeFrom(promise, closeAsync());
                 });
         }
@@ -193,10 +197,10 @@ public class IoUringFile implements AutoCloseable {
         CompletableFuture<FileStats> promise = new CompletableFuture<>();
         ByteBuf statBuffer = Buffers.pooledDirect(256);
         ioUringIoHandle.statxAsync(mask, flags, statBuffer)
-            .onComplete((res, err) -> {
+            .addListener((f) -> {
                 try {
-                    if (err != null) {
-                        promise.completeExceptionally(err);
+                    if (!f.isSuccess()) {
+                        promise.completeExceptionally(f.cause());
                         return;
                     }
 
@@ -252,7 +256,9 @@ public class IoUringFile implements AutoCloseable {
     }
 
     public CompletableFuture<Integer> closeAsync() {
-        return ioUringIoHandle.closeAsync();
+        CompletableFuture<Integer> promise = new UncancellableFuture<>();
+        AsyncUtils.completeFrom(promise, ioUringIoHandle.closeAsync());
+        return promise;
     }
 
     @Override

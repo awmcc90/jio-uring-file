@@ -8,6 +8,8 @@ import io.netty.channel.unix.IovArray;
 import io.netty.channel.uring.IoUringIoEvent;
 import io.netty.channel.uring.IoUringIoHandle;
 import io.netty.channel.uring.IoUringIoOps;
+import io.netty.util.concurrent.Future;
+import io.netty.util.concurrent.Promise;
 import io.netty.util.concurrent.ScheduledFuture;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -34,13 +36,13 @@ public class IoUringFileIoHandle implements IoUringIoHandle {
     private final int flags;
     private final int mode;
 
-    private final AsyncOpRegistry contextRegistry = new AsyncOpRegistry();
+    private final AsyncOpRegistry contextRegistry;
 
     private State state = State.INITIALIZING;
     private boolean closeSubmitted = false;
 
-    private final AtomicReference<CompletableFuture<IoUringFileIoHandle>> openFuture = new AtomicReference<>(null);
-    private final AtomicReference<CompletableFuture<Integer>> closeFuture = new AtomicReference<>(null);
+    private final AtomicReference<Promise<IoUringFileIoHandle>> openPromise = new AtomicReference<>(null);
+    private final AtomicReference<Promise<Integer>> closePromise = new AtomicReference<>(null);
 
     private IoRegistration ioRegistration;
     private int fd = -1;
@@ -55,6 +57,7 @@ public class IoUringFileIoHandle implements IoUringIoHandle {
         this.ioEventLoop = ioEventLoop;
         this.flags = flags;
         this.mode = mode;
+        this.contextRegistry = new AsyncOpRegistry(ioEventLoop);
 
         this.isAnonymous = (flags & NativeConstants.OpenFlags.TMPFILE) == NativeConstants.OpenFlags.TMPFILE;
         this.isDirectory = !isAnonymous && ((flags & NativeConstants.OpenFlags.DIRECTORY) == NativeConstants.OpenFlags.DIRECTORY);
@@ -94,32 +97,28 @@ public class IoUringFileIoHandle implements IoUringIoHandle {
         }
     }
 
-    private SyscallFuture submit(byte op, Function<AsyncOpContext, IoUringIoOps> factory) {
+    private Future<Integer> submit(byte op, Function<AsyncOpContext, IoUringIoOps> factory) {
         if (!ioRegistration.isValid()) {
-            return SyscallFuture.failed(
-                op,
-                new IllegalStateException("Registration is invalid")
+            return ioEventLoop.newFailedFuture(
+                new IOException("Registration is invalid")
             );
         }
 
         if (state == State.FAILED || state == State.CLOSED) {
-            return SyscallFuture.failed(
-                op,
+            return ioEventLoop.newFailedFuture(
                 new IOException("Handle is in terminal state: " + state)
             );
         }
 
         if (state == State.CLOSING && !(op == NativeConstants.IoRingOp.CLOSE || op == NativeConstants.IoRingOp.ASYNC_CANCEL)) {
-            return SyscallFuture.failed(
-                op,
+            return ioEventLoop.newFailedFuture(
                 new IOException("Handle is closing")
             );
         }
 
         if (!contextRegistry.canAcquire(op)) {
-            return SyscallFuture.failed(
-                op,
-                new IllegalStateException("Context registry is full for " + op)
+            return ioEventLoop.newFailedFuture(
+                new IOException("Context registry is full for " + op)
             );
         }
 
@@ -131,38 +130,38 @@ public class IoUringFileIoHandle implements IoUringIoHandle {
             return ctx.future;
         } catch (Throwable t) {
             if (ctx != null) contextRegistry.release(ctx, t);
-            return SyscallFuture.failed(op, t);
+            return ioEventLoop.newFailedFuture(t);
         }
     }
 
-    private SyscallFuture safeSubmit(byte op, Function<AsyncOpContext, IoUringIoOps> factory) {
+    private Future<Integer> safeSubmit(byte op, Function<AsyncOpContext, IoUringIoOps> factory) {
         try {
             if (!ioEventLoop.inEventLoop()) {
-                SyscallFuture proxy = new SyscallFuture(op);
+                Promise<Integer> proxy = new NettySyscallFuture(ioEventLoop, op);
                 ioEventLoop.execute(() -> AsyncUtils.completeFrom(proxy, safeSubmit(op, factory)));
                 return proxy;
             }
 
             return submit(op, factory);
         } catch (Throwable t) {
-            return SyscallFuture.failed(op, t);
+            return ioEventLoop.newFailedFuture(t);
         }
     }
 
-    private CompletableFuture<IoUringFileIoHandle> open(ByteBuf pathCStr) {
-        CompletableFuture<IoUringFileIoHandle> current = openFuture.get();
+    private Future<IoUringFileIoHandle> open(ByteBuf pathCStr) {
+        Promise<IoUringFileIoHandle> current = openPromise.get();
         if (current != null) {
             return current;
         }
 
-        CompletableFuture<IoUringFileIoHandle> promise = new CompletableFuture<>();
-        if ((current = openFuture.compareAndExchange(null, promise)) != null) {
+        Promise<IoUringFileIoHandle> promise = ioEventLoop.newPromise();
+        if ((current = openPromise.compareAndExchange(null, promise)) != null) {
             return current;
         }
 
         state = State.OPENING;
 
-        SyscallFuture f = safeSubmit(NativeConstants.IoRingOp.OPENAT, ctx ->
+        Future<Integer> f = safeSubmit(NativeConstants.IoRingOp.OPENAT, ctx ->
             new IoUringIoOps(
                 ctx.op, (byte) 0, (byte) 0, -1,
                 0L, pathCStr.memoryAddress(), mode, flags,
@@ -170,24 +169,24 @@ public class IoUringFileIoHandle implements IoUringIoHandle {
             )
         );
 
-        f.onComplete((res, err) -> {
-            if (err != null) {
+        f.addListener((fut) -> {
+            if (!fut.isSuccess()) {
                 state = State.FAILED;
                 // We only have to cancel the registration. There can't be any other ops in flight right now
                 // because the openFuture hasn't completed.
                 ioRegistration.cancel();
-                promise.completeExceptionally(err);
+                promise.tryFailure(fut.cause());
             } else {
-                fd = res;
+                fd = (int) fut.get();
                 state = State.OPEN;
-                promise.complete(this);
+                promise.trySuccess(this);
             }
         });
 
         return promise;
     }
 
-    public SyscallFuture fallocateAsync(long offset, long length, int mode) {
+    public Future<Integer> fallocateAsync(long offset, long length, int mode) {
         return safeSubmit(NativeConstants.IoRingOp.FALLOCATE, ctx ->
             new IoUringIoOps(
                 ctx.op, (byte) 0, (byte) 0, fd,
@@ -197,7 +196,7 @@ public class IoUringFileIoHandle implements IoUringIoHandle {
         );
     }
 
-    public SyscallFuture writeAsync(ByteBuf buffer, long offset, boolean dsync) {
+    public Future<Integer> writeAsync(ByteBuf buffer, long offset, boolean dsync) {
         return safeSubmit(NativeConstants.IoRingOp.WRITE, ctx ->
             new IoUringIoOps(
                 ctx.op, (byte) 0, (byte) 0, fd,
@@ -208,7 +207,7 @@ public class IoUringFileIoHandle implements IoUringIoHandle {
         );
     }
 
-    public SyscallFuture readAsync(ByteBuf buffer, long offset) {
+    public Future<Integer> readAsync(ByteBuf buffer, long offset) {
         return safeSubmit(NativeConstants.IoRingOp.READ, ctx ->
             new IoUringIoOps(
                 ctx.op, (byte) 0, (byte) 0, fd,
@@ -218,7 +217,7 @@ public class IoUringFileIoHandle implements IoUringIoHandle {
         );
     }
 
-    public SyscallFuture readvAsync(IovArray iovArray, long offset) {
+    public Future<Integer> readvAsync(IovArray iovArray, long offset) {
         return safeSubmit(NativeConstants.IoRingOp.READV, ctx ->
             new IoUringIoOps(
                 ctx.op, (byte) 0, (byte) 0, fd,
@@ -228,7 +227,7 @@ public class IoUringFileIoHandle implements IoUringIoHandle {
         );
     }
 
-    public SyscallFuture writevAsync(IovArray iovArray, long offset) {
+    public Future<Integer> writevAsync(IovArray iovArray, long offset) {
         return safeSubmit(NativeConstants.IoRingOp.WRITEV, ctx ->
             new IoUringIoOps(
                 ctx.op, (byte) 0, (byte) 0, fd,
@@ -239,7 +238,7 @@ public class IoUringFileIoHandle implements IoUringIoHandle {
     }
 
     // It goes in the offset slot; that's not a mistake
-    public SyscallFuture truncateAsync(long length) {
+    public Future<Integer> truncateAsync(long length) {
         return safeSubmit(NativeConstants.IoRingOp.FTRUNCATE, ctx ->
             new IoUringIoOps(
                 ctx.op, (byte) 0, (byte) 0, fd,
@@ -249,7 +248,7 @@ public class IoUringFileIoHandle implements IoUringIoHandle {
         );
     }
 
-    public SyscallFuture fsyncAsync(boolean isSyncData, int len, long offset) {
+    public Future<Integer> fsyncAsync(boolean isSyncData, int len, long offset) {
         return safeSubmit(NativeConstants.IoRingOp.FSYNC, ctx ->
             new IoUringIoOps(
                 ctx.op, (byte) 0, (byte) 0, fd,
@@ -260,9 +259,9 @@ public class IoUringFileIoHandle implements IoUringIoHandle {
         );
     }
 
-    public SyscallFuture unlinkAsync() {
+    public Future<Integer> unlinkAsync() {
         ByteBuf pathCStr = OpenHelpers.cStr(path);
-        SyscallFuture f = safeSubmit(NativeConstants.IoRingOp.UNLINKAT, ctx ->
+        Future<Integer> f = safeSubmit(NativeConstants.IoRingOp.UNLINKAT, ctx ->
             new IoUringIoOps(
                 ctx.op, (byte) 0, (byte) 0, -1,
                 0L, pathCStr.memoryAddress(), 0,
@@ -270,35 +269,21 @@ public class IoUringFileIoHandle implements IoUringIoHandle {
                 ctx.id, (short) 0, (short) 0, 0, 0L
             )
         );
-
-        SyscallFuture proxy = new SyscallFuture(NativeConstants.IoRingOp.UNLINKAT);
-        f.onComplete((res, err) -> {
-            pathCStr.release();
-            if (err != null) proxy.fail(err);
-            else proxy.complete(res);
-        });
-
-        return proxy;
+        f.addListener((ignored) -> pathCStr.release());
+        return f;
     }
 
-    public SyscallFuture statxAsync(int mask, int flags, ByteBuf statxBuffer) {
+    public Future<Integer> statxAsync(int mask, int flags, ByteBuf statxBuffer) {
         ByteBuf pathCStr = OpenHelpers.cStr(path);
-        SyscallFuture f = safeSubmit(NativeConstants.IoRingOp.STATX, ctx ->
+        Future<Integer> f = safeSubmit(NativeConstants.IoRingOp.STATX, ctx ->
             new IoUringIoOps(
                 ctx.op, (byte) 0, (byte) 0, NativeConstants.AtFlags.AT_FDCWD,
                 statxBuffer.memoryAddress(), pathCStr.memoryAddress(), mask, flags,
                 ctx.id, (short) 0, (short) 0, 0, 0L
             )
         );
-
-        SyscallFuture proxy = new SyscallFuture(NativeConstants.IoRingOp.STATX);
-        f.onComplete((res, err) -> {
-            pathCStr.release();
-            if (err != null) proxy.fail(err);
-            else proxy.complete(res);
-        });
-
-        return proxy;
+        f.addListener((ignored) -> pathCStr.release());
+        return f;
     }
 
     private void cancelAsync(long uringId) {
@@ -311,8 +296,11 @@ public class IoUringFileIoHandle implements IoUringIoHandle {
         );
     }
 
-    private SyscallFuture submitCancelAll() {
-        if (contextRegistry.isEmpty()) return SyscallFuture.completed(NativeConstants.IoRingOp.ASYNC_CANCEL, 0);
+    private Future<Integer> submitCancelAll() {
+        if (contextRegistry.isEmpty()) {
+            return ioEventLoop.newSucceededFuture(0);
+        }
+
         return safeSubmit(NativeConstants.IoRingOp.ASYNC_CANCEL, ctx ->
             new IoUringIoOps(
                 ctx.op, (byte) 0, (byte) 0, fd,
@@ -328,7 +316,7 @@ public class IoUringFileIoHandle implements IoUringIoHandle {
             return;
         }
 
-        SyscallFuture f = safeSubmit(NativeConstants.IoRingOp.CLOSE, ctx ->
+        Future<Integer> f = safeSubmit(NativeConstants.IoRingOp.CLOSE, ctx ->
             new IoUringIoOps(
                 ctx.op, (byte) 0, (byte) 0, fd,
                 0L, 0L, 0, 0,
@@ -336,17 +324,15 @@ public class IoUringFileIoHandle implements IoUringIoHandle {
             )
         );
 
-        f.onComplete((res, err) -> {
+        closeSubmitted = true;
+
+        f.addListener((fut) -> {
             state = State.CLOSED;
             ioRegistration.cancel();
 
-            // This can't be null if state == CLOSING
-            CompletableFuture<Integer> _closeFuture = closeFuture.get();
-            if (err != null) _closeFuture.completeExceptionally(err);
-            else _closeFuture.complete(res);
+            // closePromise cannot be null if state == CLOSING
+            AsyncUtils.completeFrom(closePromise.get(), fut);
         });
-
-        closeSubmitted = true;
     }
 
     @Override
@@ -356,19 +342,19 @@ public class IoUringFileIoHandle implements IoUringIoHandle {
         maybeSubmitClose();
     }
 
-    public CompletableFuture<Integer> closeAsync() {
+    public Future<Integer> closeAsync() {
         if (state == State.FAILED || state == State.CLOSED) {
             logger.debug("Close called on handle in state {}", state);
-            return CompletableFuture.completedFuture(0);
+            return ioEventLoop.newSucceededFuture(0);
         }
 
-        CompletableFuture<Integer> current = closeFuture.get();
+        Promise<Integer> current = closePromise.get();
         if (current != null) {
             return current;
         }
 
-        CompletableFuture<Integer> promise = new CompletableFuture<>();
-        if ((current = closeFuture.compareAndExchange(null, promise)) != null) {
+        Promise<Integer> promise = ioEventLoop.newPromise();
+        if ((current = closePromise.compareAndExchange(null, promise)) != null) {
             return current;
         }
 
@@ -379,7 +365,7 @@ public class IoUringFileIoHandle implements IoUringIoHandle {
             if (!stuckOpsCleanerTask.isDone()) stuckOpsCleanerTask.cancel(false);
             stuckOpsCleanerTask
                 .addListener(f -> submitCancelAll()
-                    .onComplete((res, err) ->
+                    .addListener((ignored) ->
                         maybeSubmitClose()));
         };
 
@@ -391,7 +377,7 @@ public class IoUringFileIoHandle implements IoUringIoHandle {
 
     @Override
     public void close() {
-        closeAsync().join();
+        closeAsync().syncUninterruptibly();
     }
 
     private enum State {
@@ -427,10 +413,10 @@ public class IoUringFileIoHandle implements IoUringIoHandle {
                     handle
                         .init(reg)
                         .open(pathCStr) // TODO: Should open retain the ByteBuf to avoid the double release logic?
-                        .whenComplete((res, err) -> {
+                        .addListener((openFuture) -> {
                             pathCStr.release();
-                            if (err != null) future.completeExceptionally(err);
-                            else future.complete(res);
+                            if (!openFuture.isSuccess()) future.completeExceptionally(openFuture.cause());
+                            else future.complete((IoUringFileIoHandle) openFuture.getNow());
                         });
                 } catch (Throwable t) {
                     pathCStr.release();

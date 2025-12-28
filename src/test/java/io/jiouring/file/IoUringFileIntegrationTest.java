@@ -51,7 +51,7 @@ class IoUringFileIntegrationTest {
 
     @AfterAll
     static void shutdownGroup() throws Exception {
-        group.shutdownGracefully().syncUninterruptibly().get();
+        group.shutdownGracefully().sync();
     }
 
     @BeforeEach

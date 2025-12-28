@@ -2,10 +2,10 @@ package io.jiouring.benchmark;
 
 import com.sun.nio.file.ExtendedOpenOption;
 import io.jiouring.file.IoUringFileIoHandle;
-import io.jiouring.file.SyscallFuture;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.MultiThreadIoEventLoopGroup;
 import io.netty.channel.uring.IoUringIoHandler;
+import io.netty.util.concurrent.Future;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.openjdk.jmh.annotations.*;
@@ -88,7 +88,7 @@ public class RandomReadBenchmark {
 
     @Benchmark
     public void ioUring_random_read(RandomIoState.Read state) throws Exception {
-        SyscallFuture[] futures = state.futures;
+        Future[] futures = state.futures;
         ByteBuf[] buffers = state.buffers;
         long[] offsets = state.randomOffsets;
         int batchSize = state.batchSize;
@@ -98,7 +98,7 @@ public class RandomReadBenchmark {
         }
 
         for (int i = 0; i < batchSize; i++) {
-            futures[i].join();
+            futures[i].await();
             buffers[i].release();
         }
     }
@@ -120,7 +120,7 @@ public class RandomReadBenchmark {
             channel.close();
         }
         if (ioUringFile != null) {
-            ioUringFile.closeAsync().join();
+            ioUringFile.closeAsync().syncUninterruptibly();
         }
         if (group != null) {
             group.shutdownGracefully().syncUninterruptibly();

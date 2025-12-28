@@ -66,6 +66,6 @@ public class BasicExample implements Runnable {
 
         f.delete().join();
 
-        group.shutdownGracefully().syncUninterruptibly().get();
+        group.shutdownGracefully().sync();
     }
 }

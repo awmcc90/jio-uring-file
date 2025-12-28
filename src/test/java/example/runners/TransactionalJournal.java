@@ -53,7 +53,6 @@ public class TransactionalJournal implements Runnable {
                 }
             });
 
-
         promise.exceptionally(t -> {
             logger.error("Failed to create temp file", t);
             shutdown(group, worker, promise, t);

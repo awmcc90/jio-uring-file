@@ -19,6 +19,11 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicLong;
+
+import static java.nio.file.StandardOpenOption.CREATE_NEW;
+import static java.nio.file.StandardOpenOption.READ;
+import static java.nio.file.StandardOpenOption.WRITE;
 
 public class VertxFileSystemRunner implements Runnable {
 
@@ -39,16 +44,15 @@ public class VertxFileSystemRunner implements Runnable {
                 .setPreferNativeTransport(true)
         );
 
+        ContextInternal context = (ContextInternal) vertx.getOrCreateContext();
+
+        Path largeFilePath = Path.of("/tmp/bench_read16140423041667483984.dat");
+
         Path path = Path.of("/tmp/random-file.dat");
         Files.deleteIfExists(path);
 
-        OpenOptions options = new OpenOptions()
-            .setCreateNew(true)
-            .setRead(true)
-            .setWrite(true);
-
         {
-            AsyncFile file = vertx.fileSystem().open(path.toString(), options).await();
+            AsyncFile file = vertx.fileSystem().open(path.toString(), new OpenOptions().setCreateNew(true).setRead(true).setWrite(true)).await();
             logger.info("File opened: {}", path);
 
             Buffer writeBuffer = Buffer.buffer("Hello World!".getBytes());
@@ -65,43 +69,68 @@ public class VertxFileSystemRunner implements Runnable {
         }
 
         {
-            long startTime= System.nanoTime();
-            ContextInternal context = (ContextInternal) vertx.getOrCreateContext();
-            logger.info("Event loop type: {}", context.nettyEventLoop().getClass().getSimpleName());
-            IoUringFileIoHandle handle = IoUringFileIoHandle.open(Path.of("/tmp/bench_read16140423041667483984.dat"), (IoEventLoop) context.nettyEventLoop()).join();
+            long startTime = System.nanoTime();
+            IoUringFileIoHandle handle = IoUringFileIoHandle.open(largeFilePath, (IoEventLoop) context.nettyEventLoop()).join();
             IoUringAsyncFileImpl asyncFile = new IoUringAsyncFileImpl((VertxInternal) vertx, context, handle);
-
             Promise<Void> promise = Promise.promise();
             context.execute(() -> {
-                asyncFile.handler(buffer -> {});
+                AtomicLong counter = new AtomicLong(0);
+                asyncFile.handler(buffer -> counter.addAndGet(buffer.length()));
                 asyncFile.endHandler(v -> {
                     long endTime = System.nanoTime();
-                    logger.info("[IoUringAsyncFileImpl] Finished reading. Took {}", formatNanos(endTime - startTime));
-                    context.execute(() -> asyncFile.close().onComplete(ar -> {
-                        if (ar.failed()) promise.fail(ar.cause());
-                        else promise.complete();
-                    }));
+                    logger.info("[IoUringAsyncFileImpl] Finished reading {} bytes. Took {}", counter.get(), formatNanos(endTime - startTime));
+                    context.execute(() -> asyncFile.close()
+                        .onComplete(ar -> {
+                            if (ar.failed()) promise.fail(ar.cause());
+                            else promise.complete();
+                        }));
                 });
                 asyncFile.exceptionHandler(promise::fail);
             });
             promise.future().await();
-            logger.info("Done IoUringAsyncFileImpl");
+            logger.info("Done IoUringAsyncFileImpl reading.");
         }
 
         {
-            long startTime= System.nanoTime();
+            Path writePath = Path.of("io_uring_copy.dat");
+            Files.deleteIfExists(writePath);
+
+            IoUringFileIoHandle readHandle = IoUringFileIoHandle.open(largeFilePath, (IoEventLoop) context.nettyEventLoop()).join();
+            IoUringAsyncFileImpl readFile = new IoUringAsyncFileImpl((VertxInternal) vertx, context, readHandle);
+
+            IoUringFileIoHandle writeHandle = IoUringFileIoHandle.open(writePath, (IoEventLoop) context.nettyEventLoop(), READ, WRITE, CREATE_NEW).join();
+            IoUringAsyncFileImpl writeFile = new IoUringAsyncFileImpl((VertxInternal) vertx, context, writeHandle);
+
+            long startTime = System.nanoTime();
+
+            Promise<Void> promise = Promise.promise();
+            context.execute(() -> readFile.pipeTo(writeFile)
+                .onComplete(ar -> {
+                    long endTime = System.nanoTime();
+                    logger.info("[IoUringAsyncFileImpl] Finished pipe: {}", formatNanos(endTime - startTime));
+
+                    if (ar.failed()) promise.fail(ar.cause());
+                    else promise.complete();
+                }));
+            promise.future().await();
+            logger.info("Done IoUringAsyncFileImpl pipe.");
+        }
+
+        {
+            long startTime = System.nanoTime();
             Promise<Void> readDone = Promise.promise();
             vertx
                 .fileSystem()
-                .open("/tmp/bench_read16140423041667483984.dat", new OpenOptions().setRead(true))
+                .open(largeFilePath.toString(), new OpenOptions().setRead(true))
                 .onComplete(ar -> {
                     if (ar.failed()) readDone.fail(ar.cause());
                     else {
                         AsyncFile file = ar.result();
-                        file.handler(buffer -> {});
+                        AtomicLong counter = new AtomicLong(0);
+                        file.handler(buffer -> counter.addAndGet(buffer.length()));
                         file.endHandler(v -> {
                             long endTime = System.nanoTime();
-                            logger.info("Finished reading. Took {}", formatNanos(endTime - startTime));
+                            logger.info("[AsyncFileImpl] Finished reading {} bytes. Took {}", counter.get(), formatNanos(endTime - startTime));
                             file.close().onComplete(ignored -> readDone.complete());
                         });
                         file.exceptionHandler(readDone::fail);
@@ -109,11 +138,33 @@ public class VertxFileSystemRunner implements Runnable {
                 });
 
             readDone.future().await();
-            logger.info("Done AsyncFileImpl");
+            logger.info("Done AsyncFileImpl reading.");
+        }
+
+        {
+            Path writePath = Path.of("async_file_copy.dat");
+            Files.deleteIfExists(writePath);
+
+            AsyncFile readFile = vertx.fileSystem().openBlocking(largeFilePath.toString(), new OpenOptions().setRead(true));
+            AsyncFile writeFile = vertx.fileSystem().openBlocking(writePath.toString(), new OpenOptions().setRead(true).setWrite(true).setCreateNew(true));
+
+            long startTime = System.nanoTime();
+
+            Promise<Void> promise = Promise.promise();
+            context.execute(() -> readFile.pipeTo(writeFile)
+                .onComplete(ar -> {
+                    long endTime = System.nanoTime();
+                    logger.info("[AsyncFileImpl] Finished pipe: {}", formatNanos(endTime - startTime));
+
+                    if (ar.failed()) promise.fail(ar.cause());
+                    else promise.complete();
+                }));
+            promise.future().await();
+            logger.info("Done AsyncFileImpl pipe.");
         }
 
         Files.deleteIfExists(path);
-        vertx.close().await(3, TimeUnit.SECONDS);
+        vertx.close().await(5, TimeUnit.SECONDS);
     }
 
     private static String formatNanos(long ns) {

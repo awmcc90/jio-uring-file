@@ -1,8 +1,8 @@
 package io.jiouring.benchmark;
 
-import io.jiouring.file.SyscallFuture;
 import io.jiouring.file.Buffers;
 import io.netty.buffer.ByteBuf;
+import io.netty.util.concurrent.Future;
 import org.openjdk.jmh.annotations.*;
 
 import java.nio.ByteBuffer;
@@ -22,11 +22,11 @@ public class RandomIoState {
     public long[] randomOffsets;
     public ByteBuf[] buffers;
     public ByteBuffer[] nioBuffers;
-    public SyscallFuture[] futures;
+    public Future[] futures;
 
     @Setup(Level.Trial)
     public void setup() {
-        futures = new SyscallFuture[batchSize];
+        futures = new Future[batchSize];
         buffers = new ByteBuf[batchSize];
         nioBuffers = new ByteBuffer[batchSize];
         randomOffsets = new long[batchSize];

@@ -1,6 +1,7 @@
 package io.jiouring.file;
 
 import io.netty.channel.uring.IoUringIoEvent;
+import io.netty.util.concurrent.EventExecutor;
 import it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -14,16 +15,18 @@ class AsyncOpRegistry  {
 
     private static final Logger logger = LoggerFactory.getLogger(AsyncOpRegistry.class);
 
+    private final EventExecutor executor;
     private final OpIdPool opIdPool;
     private final Int2ObjectOpenHashMap<AsyncOpContext> contextLookup;
 
-    AsyncOpRegistry(int initialCapacity) {
-        opIdPool = new OpIdPool();
-        contextLookup = new Int2ObjectOpenHashMap<>(initialCapacity);
+    AsyncOpRegistry(EventExecutor executor, int initialCapacity) {
+        this.executor = executor;
+        this.opIdPool = new OpIdPool();
+        this.contextLookup = new Int2ObjectOpenHashMap<>(initialCapacity);
     }
 
-    AsyncOpRegistry() {
-        this(4096);
+    AsyncOpRegistry(EventExecutor executor) {
+        this(executor, 4096);
     }
 
     boolean isEmpty() {
@@ -36,7 +39,7 @@ class AsyncOpRegistry  {
 
     AsyncOpContext acquire(byte op) {
         short id = opIdPool.acquire(op);
-        AsyncOpContext ctx = new AsyncOpContext(op, id);
+        AsyncOpContext ctx = new AsyncOpContext(executor, op, id);
         contextLookup.put(key(op, id), ctx);
         return ctx;
     }
@@ -51,7 +54,7 @@ class AsyncOpRegistry  {
         }
 
         if (ctx.inUse) {
-            ctx.future.complete(event.res());
+            ctx.future.trySuccess(event.res());
             contextLookup.remove(key(ctx.op, ctx.id));
             opIdPool.release(ctx.op, ctx.id);
             ctx.inUse = false;
@@ -60,7 +63,7 @@ class AsyncOpRegistry  {
 
     void release(AsyncOpContext ctx, Throwable cause) {
         if (ctx.inUse) {
-            ctx.future.fail(cause);
+            ctx.future.tryFailure(cause);
             contextLookup.remove(key(ctx.op, ctx.id));
             opIdPool.release(ctx.op, ctx.id);
             ctx.inUse = false;
