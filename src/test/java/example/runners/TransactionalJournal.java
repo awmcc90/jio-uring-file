@@ -1,11 +1,12 @@
 package example.runners;
 
+import io.jiouring.file.Buffers;
 import io.jiouring.file.IoUringFile;
 import io.netty.buffer.ByteBuf;
-import io.netty.buffer.PooledByteBufAllocator;
 import io.netty.channel.IoEventLoop;
 import io.netty.channel.MultiThreadIoEventLoopGroup;
 import io.netty.channel.uring.IoUringIoHandler;
+import io.netty.util.ReferenceCountUtil;
 import io.netty.util.concurrent.DefaultThreadFactory;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -104,7 +105,7 @@ public class TransactionalJournal implements Runnable {
                 backpressure.acquire();
 
                 long fileOffset = i * batchSize;
-                ByteBuf buffer = PooledByteBufAllocator.DEFAULT.directBuffer(batchSize);
+                ByteBuf buffer = Buffers.direct(batchSize);
 
                 for (int r = 0; r < recordsPerBatch; r++) {
                     long recordId = (i * recordsPerBatch) + r;
@@ -114,24 +115,29 @@ public class TransactionalJournal implements Runnable {
                     buffer.writeZero(recordSize - 24); // Padding
                 }
 
-                file
-                    .writeAsync(buffer, fileOffset)
-                    .handle((res, err) -> {
-                        backpressure.release();
+                try {
+                    file
+                        .writeAsync(buffer, fileOffset)
+                        .handle((res, err) -> {
+                            buffer.release();
+                            backpressure.release();
 
-                        if (err != null) promise.completeExceptionally(err);
-                        else {
-                            long c = completedBatches.incrementAndGet();
-                            if (c % logBatch == 0L) {
-                                long progress = c * recordsPerBatch;
-                                logger.info("Progress: {} / {} records", progress, actualTotalRecords);
+                            if (err != null) promise.completeExceptionally(err);
+                            else {
+                                long c = completedBatches.incrementAndGet();
+                                if (c % logBatch == 0L) {
+                                    long progress = c * recordsPerBatch;
+                                    logger.info("Progress: {} / {} records", progress, actualTotalRecords);
+                                }
+                                if (c == totalBatches) promise.complete(null);
                             }
-                            if (c == totalBatches) promise.complete(null);
-                        }
-                        return null;
-                    });
-
-                buffer.release();
+                            return null;
+                        });
+                } catch (Exception t) {
+                    ReferenceCountUtil.release(buffer);
+                    backpressure.release();
+                    promise.completeExceptionally(t);
+                }
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();

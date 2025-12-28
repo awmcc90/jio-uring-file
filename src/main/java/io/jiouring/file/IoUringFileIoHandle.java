@@ -29,7 +29,6 @@ import java.util.function.Function;
 public class IoUringFileIoHandle implements IoUringIoHandle {
 
     private static final Logger logger = LoggerFactory.getLogger(IoUringFileIoHandle.class);
-    private static final long OP_TIMEOUT_NS = 30_000_000_000L;
 
     public final Path path;
     private final IoEventLoop ioEventLoop;
@@ -50,6 +49,7 @@ public class IoUringFileIoHandle implements IoUringIoHandle {
     public final boolean isAnonymous;
     public final boolean isDirectory;
 
+    private int generation = 0;
     private final ScheduledFuture<?> stuckOpsCleanerTask;
 
     private IoUringFileIoHandle(Path path, IoEventLoop ioEventLoop, int flags, int mode) {
@@ -70,21 +70,9 @@ public class IoUringFileIoHandle implements IoUringIoHandle {
         );
     }
 
-    public boolean canWrite() {
-        return contextRegistry.canAcquire(NativeConstants.IoRingOp.WRITE);
-    }
-
-    public IoUringFileIoHandle init(IoRegistration ioRegistration) {
-        if (!ioRegistration.isValid()) {
-            throw new IllegalStateException("IoRegistration is not valid");
-        }
-        this.ioRegistration = ioRegistration;
-        this.state = State.INITIALIZED;
-        return this;
-    }
-
     private void checkStuckOps() {
-        List<AsyncOpContext> stuckOps = contextRegistry.findStuckOps(OP_TIMEOUT_NS);
+        int currentGeneration = ++generation;
+        List<AsyncOpContext> stuckOps = contextRegistry.progress(currentGeneration);
         if (stuckOps.isEmpty()) {
             return;
         }
@@ -97,29 +85,50 @@ public class IoUringFileIoHandle implements IoUringIoHandle {
         }
     }
 
-    private Future<Integer> submit(byte op, Function<AsyncOpContext, IoUringIoOps> factory) {
+    public boolean permit(byte op) {
+        return validateOp(op).permit();
+    }
+
+    private OpValidationResult validateOp(byte op) {
         if (!ioRegistration.isValid()) {
-            return ioEventLoop.newFailedFuture(
-                new IOException("Registration is invalid")
-            );
+            return OpValidationResult.REGISTRATION_INVALID;
         }
 
-        if (state == State.FAILED || state == State.CLOSED) {
-            return ioEventLoop.newFailedFuture(
-                new IOException("Handle is in terminal state: " + state)
-            );
+        if (state == State.FAILED) {
+            return OpValidationResult.FAILED;
         }
 
-        if (state == State.CLOSING && !(op == NativeConstants.IoRingOp.CLOSE || op == NativeConstants.IoRingOp.ASYNC_CANCEL)) {
-            return ioEventLoop.newFailedFuture(
-                new IOException("Handle is closing")
-            );
+        if (state == State.CLOSED) {
+            return OpValidationResult.CLOSED;
+        }
+
+        if (state == State.CLOSING &&
+            op != NativeConstants.IoRingOp.CLOSE &&
+            op != NativeConstants.IoRingOp.ASYNC_CANCEL) {
+            return OpValidationResult.CLOSING_OP_NOT_ALLOWED;
         }
 
         if (!contextRegistry.canAcquire(op)) {
-            return ioEventLoop.newFailedFuture(
-                new IOException("Context registry is full for " + op)
-            );
+            return OpValidationResult.REGISTRY_FULL;
+        }
+
+        return OpValidationResult.OK;
+    }
+
+    public IoUringFileIoHandle init(IoRegistration ioRegistration) {
+        if (!ioRegistration.isValid()) {
+            throw new IllegalStateException("IoRegistration is not valid");
+        }
+        this.ioRegistration = ioRegistration;
+        this.state = State.INITIALIZED;
+        return this;
+    }
+
+    private Future<Integer> submit(byte op, Function<AsyncOpContext, IoUringIoOps> factory) {
+        OpValidationResult result = validateOp(op);
+
+        if (!result.permit()) {
+            return ioEventLoop.newFailedFuture(result.toException(op));
         }
 
         AsyncOpContext ctx = null;
@@ -127,7 +136,7 @@ public class IoUringFileIoHandle implements IoUringIoHandle {
             ctx = contextRegistry.acquire(op);
             ctx.uringId = ioRegistration.submit(factory.apply(ctx));
             if (ctx.uringId == -1L) throw new IOException("io_uring submission failed (ring full?)");
-            return ctx.future;
+            return ctx;
         } catch (Throwable t) {
             if (ctx != null) contextRegistry.release(ctx, t);
             return ioEventLoop.newFailedFuture(t);
@@ -137,7 +146,7 @@ public class IoUringFileIoHandle implements IoUringIoHandle {
     private Future<Integer> safeSubmit(byte op, Function<AsyncOpContext, IoUringIoOps> factory) {
         try {
             if (!ioEventLoop.inEventLoop()) {
-                Promise<Integer> proxy = new NettySyscallFuture(ioEventLoop, op);
+                Promise<Integer> proxy = new AsyncOpContext(ioEventLoop, op);
                 ioEventLoop.execute(() -> AsyncUtils.completeFrom(proxy, safeSubmit(op, factory)));
                 return proxy;
             }
@@ -148,7 +157,7 @@ public class IoUringFileIoHandle implements IoUringIoHandle {
         }
     }
 
-    private Future<IoUringFileIoHandle> open(ByteBuf pathCStr) {
+    private Future<IoUringFileIoHandle> open() {
         Promise<IoUringFileIoHandle> current = openPromise.get();
         if (current != null) {
             return current;
@@ -161,6 +170,7 @@ public class IoUringFileIoHandle implements IoUringIoHandle {
 
         state = State.OPENING;
 
+        ByteBuf pathCStr = OpenHelpers.cStr(path);
         Future<Integer> f = safeSubmit(NativeConstants.IoRingOp.OPENAT, ctx ->
             new IoUringIoOps(
                 ctx.op, (byte) 0, (byte) 0, -1,
@@ -170,6 +180,8 @@ public class IoUringFileIoHandle implements IoUringIoHandle {
         );
 
         f.addListener((fut) -> {
+            pathCStr.release();
+
             if (!fut.isSuccess()) {
                 state = State.FAILED;
                 // We only have to cancel the registration. There can't be any other ops in flight right now
@@ -177,7 +189,7 @@ public class IoUringFileIoHandle implements IoUringIoHandle {
                 ioRegistration.cancel();
                 promise.tryFailure(fut.cause());
             } else {
-                fd = (int) fut.get();
+                fd = (int) fut.getNow();
                 state = State.OPEN;
                 promise.trySuccess(this);
             }
@@ -390,6 +402,40 @@ public class IoUringFileIoHandle implements IoUringIoHandle {
         FAILED
     }
 
+    public enum OpValidationResult {
+        OK(true),
+        REGISTRATION_INVALID(false),
+        FAILED(false),
+        CLOSED(false),
+        CLOSING_OP_NOT_ALLOWED(false),
+        REGISTRY_FULL(false);
+
+        private final boolean permitted;
+
+        OpValidationResult(boolean permitted) {
+            this.permitted = permitted;
+        }
+
+        public boolean permit() {
+            return this.permitted;
+        }
+
+        private IOException toException(byte op) {
+            return switch (this) {
+                case REGISTRATION_INVALID ->
+                    new IOException("Registration is invalid");
+                case FAILED, CLOSED ->
+                    new IOException("Handle is in terminal state: " + this);
+                case CLOSING_OP_NOT_ALLOWED ->
+                    new IOException("Operation not allowed while closing: " + op);
+                case REGISTRY_FULL ->
+                    new IOException("Context registry is full for op: " + op);
+                default ->
+                    throw new AssertionError(this);
+            };
+        }
+    }
+
     public static CompletableFuture<IoUringFileIoHandle> open(
         Path path,
         IoEventLoop ioEventLoop,
@@ -407,19 +453,16 @@ public class IoUringFileIoHandle implements IoUringIoHandle {
                     return;
                 }
 
-                ByteBuf pathCStr = OpenHelpers.cStr(path);
                 try {
-                    IoRegistration reg = (IoRegistration) f.get();
+                    IoRegistration reg = (IoRegistration) f.getNow();
                     handle
                         .init(reg)
-                        .open(pathCStr) // TODO: Should open retain the ByteBuf to avoid the double release logic?
+                        .open()
                         .addListener((openFuture) -> {
-                            pathCStr.release();
                             if (!openFuture.isSuccess()) future.completeExceptionally(openFuture.cause());
                             else future.complete((IoUringFileIoHandle) openFuture.getNow());
                         });
                 } catch (Throwable t) {
-                    pathCStr.release();
                     future.completeExceptionally(t);
                 }
             });

@@ -38,7 +38,7 @@ public class IoUringFile implements AutoCloseable {
                     if (!f.isSuccess()) {
                         promise.completeExceptionally(f.cause());
                     } else {
-                        int res = (int) f.get();
+                        int res = (int) f.getNow();
                         byteBuf.writerIndex(byteBuf.writerIndex() + res);
                         promise.complete(res);
                     }
@@ -63,7 +63,7 @@ public class IoUringFile implements AutoCloseable {
                     if (!f.isSuccess()) {
                         promise.completeExceptionally(f.cause());
                     } else {
-                        int res = (int) f.get();
+                        int res = (int) f.getNow();
                         progressBuffers(buffers, res, true);
                         promise.complete(res);
                     }
@@ -89,7 +89,7 @@ public class IoUringFile implements AutoCloseable {
                     if (!f.isSuccess()) {
                         promise.completeExceptionally(f.cause());
                     } else {
-                        int res = (int) f.get();
+                        int res = (int) f.getNow();
                         byteBuf.readerIndex(byteBuf.readerIndex() + res);
                         promise.complete(res);
                     }
@@ -119,7 +119,7 @@ public class IoUringFile implements AutoCloseable {
                     if (!f.isSuccess()) {
                         promise.completeExceptionally(f.cause());
                     } else {
-                        int res = (int) f.get();
+                        int res = (int) f.getNow();
                         progressBuffers(buffers, res, false);
                         promise.complete(res);
                     }
@@ -195,7 +195,7 @@ public class IoUringFile implements AutoCloseable {
 
     private CompletableFuture<FileStats> stat(int mask, int flags) {
         CompletableFuture<FileStats> promise = new CompletableFuture<>();
-        ByteBuf statBuffer = Buffers.pooledDirect(256);
+        ByteBuf statBuffer = Buffers.direct(256);
         ioUringIoHandle.statxAsync(mask, flags, statBuffer)
             .addListener((f) -> {
                 try {

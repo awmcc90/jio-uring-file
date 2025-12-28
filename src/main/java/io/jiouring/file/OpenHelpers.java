@@ -2,8 +2,8 @@ package io.jiouring.file;
 
 import com.sun.nio.file.ExtendedOpenOption;
 import io.netty.buffer.ByteBuf;
+import io.netty.buffer.ByteBufUtil;
 
-import java.nio.charset.StandardCharsets;
 import java.nio.file.LinkOption;
 import java.nio.file.OpenOption;
 import java.nio.file.Path;
@@ -18,11 +18,9 @@ public final class OpenHelpers {
 
     public static ByteBuf cStr(Path path) {
         String absPath = path.toAbsolutePath().toString();
-        byte[] bytes = absPath.getBytes(StandardCharsets.UTF_8);
-
-        ByteBuf buf = Buffers.direct(bytes.length + 1);
-        buf.writeBytes(bytes);
-        buf.writeByte(0); // Null terminator
+        ByteBuf buf = Buffers.direct();
+        ByteBufUtil.writeUtf8(buf, absPath);
+        buf.writeByte(0);
         return buf;
     }
 

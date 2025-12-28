@@ -74,7 +74,6 @@ class AsyncOpRegistryTest {
         AsyncOpContext ctx = registry.acquire((byte) 22);
         assertNotNull(ctx);
         assertEquals(22, ctx.op);
-        assertTrue(ctx.inUse);
     }
 
     @Test
@@ -95,83 +94,47 @@ class AsyncOpRegistryTest {
     }
 
     @Test
-    void nextSetsStartTime() {
-        AsyncOpRegistry registry = new AsyncOpRegistry(eventLoop, 100);
-        long before = System.nanoTime();
-        AsyncOpContext ctx = registry.acquire((byte) 1);
-        long after = System.nanoTime();
-        assertTrue(ctx.startTime >= before);
-        assertTrue(ctx.startTime <= after);
-    }
-
-    @Test
     void releaseFailsFuture() {
         AsyncOpRegistry registry = new AsyncOpRegistry(eventLoop, 100);
         AsyncOpContext ctx = registry.acquire((byte) 1);
         RuntimeException cause = new RuntimeException("test");
         registry.release(ctx, cause);
-        assertThrows(RuntimeException.class, ctx.future::await);
+        assertThrows(RuntimeException.class, ctx::sync);
     }
 
     @Test
-    void releaseSetsInUseFalse() {
+    void progressReturnsEmptyWhenNoOps() {
         AsyncOpRegistry registry = new AsyncOpRegistry(eventLoop, 100);
-        AsyncOpContext ctx = registry.acquire((byte) 1);
-        assertTrue(ctx.inUse);
-
-        registry.release(ctx, new RuntimeException());
-        assertFalse(ctx.inUse);
-    }
-
-    @Test
-    void findStuckOpsReturnsEmptyWhenNoOps() {
-        AsyncOpRegistry registry = new AsyncOpRegistry(eventLoop, 100);
-        List<AsyncOpContext> stuck = registry.findStuckOps(1_000_000_000L);
+        List<AsyncOpContext> stuck = registry.progress(100);
         assertTrue(stuck.isEmpty());
     }
 
     @Test
-    void findStuckOpsReturnsEmptyWhenNotStuck() {
+    void progressReturnsEmptyWhenNoneStuck() {
         AsyncOpRegistry registry = new AsyncOpRegistry(eventLoop, 100);
         registry.acquire((byte) 1);
 
-        List<AsyncOpContext> stuck = registry.findStuckOps(1_000_000_000_000L);
+        List<AsyncOpContext> stuck = registry.progress(5);
         assertTrue(stuck.isEmpty());
     }
 
     @Test
-    void findStuckOpsFindsOldOps() throws Exception {
+    void progressFindsOldOps() {
         AsyncOpRegistry registry = new AsyncOpRegistry(eventLoop, 100);
         AsyncOpContext ctx = registry.acquire((byte) 1);
-
-        Thread.sleep(10);
-
-        List<AsyncOpContext> stuck = registry.findStuckOps(1_000_000L);
+        List<AsyncOpContext> stuck = registry.progress(100);
         assertEquals(1, stuck.size());
         assertSame(ctx, stuck.get(0));
     }
 
     @Test
-    void findStuckOpsOnlyReturnsInUse() throws Exception {
+    void progressReturnsMultipleStuckOps() throws Exception {
         AsyncOpRegistry registry = new AsyncOpRegistry(eventLoop, 100);
-        AsyncOpContext ctx = registry.acquire((byte) 1);
-
-        Thread.sleep(10);
-        ctx.inUse = false;
-
-        List<AsyncOpContext> stuck = registry.findStuckOps(1_000_000L);
-        assertTrue(stuck.isEmpty());
-    }
-
-    @Test
-    void findStuckOpsReturnsMultiple() throws Exception {
-        AsyncOpRegistry registry = new AsyncOpRegistry(eventLoop, 100);
+        // These are gen 0
         AsyncOpContext ctx1 = registry.acquire((byte) 1);
         AsyncOpContext ctx2 = registry.acquire((byte) 2);
 
-        Thread.sleep(10);
-
-        List<AsyncOpContext> stuck = registry.findStuckOps(1_000_000L);
+        List<AsyncOpContext> stuck = registry.progress(100);
         assertEquals(2, stuck.size());
         assertTrue(stuck.contains(ctx1));
         assertTrue(stuck.contains(ctx2));

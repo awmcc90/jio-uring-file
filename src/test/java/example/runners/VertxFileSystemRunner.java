@@ -46,7 +46,8 @@ public class VertxFileSystemRunner implements Runnable {
 
         ContextInternal context = (ContextInternal) vertx.getOrCreateContext();
 
-        Path largeFilePath = Path.of("/tmp/bench_read16140423041667483984.dat");
+        // dd if=/dev/urandom of=/tmp/random_1gb.bin bs=1M count=1024 status=progress
+        Path largeFilePath = Path.of("/tmp/random_1gb.bin");
 
         Path path = Path.of("/tmp/random-file.dat");
         Files.deleteIfExists(path);

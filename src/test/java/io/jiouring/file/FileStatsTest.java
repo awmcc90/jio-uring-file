@@ -8,8 +8,7 @@ import static org.junit.jupiter.api.Assertions.*;
 class FileStatsTest {
 
     private ByteBuf createStatxBuffer() {
-        return Buffers.direct(256)
-            .writeZero(256);
+        return Buffers.direct(256, true);
     }
 
     @Test

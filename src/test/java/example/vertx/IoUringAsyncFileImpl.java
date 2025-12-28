@@ -1,10 +1,9 @@
 package example.vertx;
 
+import io.jiouring.file.Buffers;
 import io.jiouring.file.IoUringFileIoHandle;
 import io.jiouring.file.NativeConstants;
 import io.netty.buffer.ByteBuf;
-import io.netty.buffer.PooledByteBufAllocator;
-import io.netty.buffer.Unpooled;
 import io.vertx.core.Future;
 import io.vertx.core.Handler;
 import io.vertx.core.Promise;
@@ -74,7 +73,8 @@ public class IoUringAsyncFileImpl implements AsyncFile {
                     java.nio.file.StandardOpenOption.WRITE
                 );
             } catch (IOException e) {
-                //throw new FileSystemException(e);
+                // For anonymous temp files we can't do this, so I guess return null
+                // throw new FileSystemException(e);
                 return null;
             }
         });
@@ -142,12 +142,16 @@ public class IoUringAsyncFileImpl implements AsyncFile {
 
         int toRead = (int) Math.min(Integer.MAX_VALUE, Math.min(readBufferSize, readLength));
         if (toRead <= 0) {
+            // We are done - no need to submit just get an empty buf returned
+            if (readLength == 0) {
+                handleEnd();
+            }
             return;
         }
 
         readInProgress = true;
 
-        ByteBuf bb = PooledByteBufAllocator.DEFAULT.buffer(toRead);
+        ByteBuf bb = Buffers.direct(toRead);
         io.netty.util.concurrent.Future<Integer> readFuture;
 
         try {
@@ -171,18 +175,20 @@ public class IoUringAsyncFileImpl implements AsyncFile {
 
                 int res = (int) f.getNow();
 
-                BufferInternal buf;
-                try {
-                    bb.writerIndex(bb.writerIndex() + res);
-                    readPos += res;
-                    readLength -= res;
-
-                    buf = BufferInternal.safeBuffer(bb);
-                } finally {
-                    if (bb.refCnt() > 0) bb.release();
+                if (res == 0) {
+                    bb.release();
+                    handleEnd();
+                    return;
                 }
 
-                if (queue.write(buf) && buf.length() > 0) {
+                bb.writerIndex(bb.writerIndex() + res);
+                readPos += res;
+                readLength -= res;
+
+                // Transfers ownership of bb and releases
+                BufferInternal buf = BufferInternal.safeBuffer(bb);
+
+                if (queue.write(buf) && readLength > 0) {
                     doRead();
                 }
             });
@@ -224,83 +230,79 @@ public class IoUringAsyncFileImpl implements AsyncFile {
         return p.future();
     }
 
-    private Future<Void> doWrite(Buffer buffer, long position, Promise<Void> promise) {
+    // If the Vert.x [Buffer] is backed by a [ByteBuf], this method will not modify the state of it by design.
+    // The documentation states that "[BufferImpl] implementation ignores the wrapped [ByteBuf] reader index"
+    // but that's not actually true; methods like appendBuffer make explicit use of it. Our only option is to
+    // treat [Buffer] as random access and let the caller deal with the Buffer as needed.
+    private void doWrite(Buffer buffer, long position, Promise<Void> promise) {
         checkContext();
         checkClosed();
 
         final ByteBuf bb;
-        final boolean needsRelease;
-        if (buffer instanceof BufferImpl bufferImpl && bufferImpl.byteBuf().isDirect()) {
-            bb = bufferImpl.byteBuf();
-            needsRelease = false;
+        if (buffer instanceof BufferImpl bufferImpl && bufferImpl.byteBuf().hasMemoryAddress()) {
+            bb = bufferImpl.byteBuf().retainedSlice();
         } else {
-            bb = PooledByteBufAllocator.DEFAULT.buffer(buffer.length());
+            bb = Buffers.direct(buffer.length());
             // Might be able to copy efficiently
             if (buffer instanceof BufferInternal bufferInternal) {
+                // getByteBuf is an independent view
                 bb.writeBytes(bufferInternal.getByteBuf());
             } else {
                 // And also might not -_-
                 bb.writeBytes(buffer.getBytes());
             }
-            needsRelease = true;
         }
 
         int length = bb.readableBytes();
 
         writesOutstandingBytes += length;
+        submitWrite(bb, position, promise);
+
+        promise.future();
+    }
+
+    private void submitWrite(final ByteBuf bb, final long position, final Promise<Void> promise) {
         boolean wasFull = writeQueueFull();
 
         io.netty.util.concurrent.Future<Integer> writeFuture;
         try {
             writeFuture = handle.writeAsync(bb, position, false);
         } catch (Throwable t) {
-            if (needsRelease) bb.release();
-            writesOutstandingBytes -= length;
-            promise.fail(t);
-            return promise.future();
+            bb.release();
+            // Only decrement by whatever is in this buffer, which should realistically be equal to length but in the
+            // event something was partially written AND failed then we'll see that here.
+            writesOutstandingBytes -= bb.readableBytes();
+            promise.tryFail(t);
+            return;
         }
 
-        writeFuture
-            .addListener((f) -> {
-                if (!f.isSuccess()) {
-                    if (needsRelease) bb.release();
-                    writesOutstandingBytes -= length;
-                    promise.fail(f.cause());
-                    return;
-                }
+        writeFuture.addListener(f -> {
+            if (!f.isSuccess()) {
+                bb.release();
+                writesOutstandingBytes -= bb.readableBytes();
+                promise.tryFail(f.cause());
+                return;
+            }
 
-                int res = (int) f.getNow();
-                bb.readerIndex(bb.readerIndex() + res);
-                writesOutstandingBytes -= res;
+            int res = (int) f.getNow();
 
-                // Partial write
-                if (bb.readableBytes() > 0) {
-                    // Take the remaining readable slice, which is just a view of the underlying ByteBuf (backed by the
-                    // original) and re-submit that portion. Key point here: if we created the ByteBuf in this method,
-                    // we are always on the hook for releasing it, which we do in the onComplete.
-                    try {
-                        ByteBuf readableSlice = bb.slice(bb.readerIndex(), bb.readableBytes());
-                        doWrite(BufferInternal.buffer(readableSlice), position + res, promise)
-                            .onComplete(ar -> {
-                                if (needsRelease) bb.release();
-                            });
-                    } catch (Throwable t) {
-                        if (needsRelease && bb.refCnt() > 0) bb.release();
-                        promise.tryFail(t);
+            writesOutstandingBytes -= res;
+            bb.readerIndex(bb.readerIndex() + res);
+
+            if (bb.isReadable()) {
+                submitWrite(bb, position + res, promise);
+            } else {
+                bb.release();
+                try {
+                    if (wasFull && !writeQueueFull() && drainHandler != null) {
+                        drainHandler.handle(null);
                     }
-                } else {
-                    try {
-                        if (wasFull && !writeQueueFull() && drainHandler != null) {
-                            drainHandler.handle(null);
-                        }
-                        promise.tryComplete();
-                    } catch (Throwable t) {
-                        promise.tryFail(t);
-                    }
+                    promise.tryComplete();
+                } catch (Throwable t) {
+                    promise.tryFail(t);
                 }
-            });
-
-        return promise.future();
+            }
+        });
     }
 
     @Override
@@ -313,7 +315,7 @@ public class IoUringAsyncFileImpl implements AsyncFile {
     @Override
     public boolean writeQueueFull() {
         checkContext();
-        return writesOutstandingBytes >= maxWrites || !handle.canWrite();
+        return writesOutstandingBytes >= maxWrites || !handle.permit(NativeConstants.IoRingOp.WRITE);
     }
 
     @Override
@@ -342,62 +344,55 @@ public class IoUringAsyncFileImpl implements AsyncFile {
     public Future<Buffer> read(Buffer buffer, int offset, long position, int length) {
         checkContext();
         checkClosed();
+        Promise<Buffer> promise = context.promise();
+        doRead(buffer, offset, position, length, promise);
+        return promise.future();
+    }
 
+    private void doRead(Buffer buffer, int offset, long position, int length, Promise<Buffer> promise) {
         ByteBuf bb;
         ByteBuf slice;
-        final boolean needsRelease;
-        if (buffer instanceof BufferImpl bufferImpl && bufferImpl.byteBuf().isDirect()) {
-            bb = bufferImpl.byteBuf();
+
+        if (buffer instanceof BufferImpl bufferImpl && bufferImpl.byteBuf().hasMemoryAddress()) {
+            bb = bufferImpl.byteBuf().retain();
             slice = bb.slice(offset, length);
             slice.writerIndex(0);
-            needsRelease = false;
         } else {
             // -_-
-            bb = slice = PooledByteBufAllocator.DEFAULT.buffer(length);
-            needsRelease = true;
+            bb = slice = Buffers.direct(length);
         }
 
-        Promise<Buffer> promise = context.promise();
-
-        handle
-            .readAsync(slice, position)
-            .addListener((f) -> {
+        handle.readAsync(slice, position)
+            .addListener(f -> {
                 if (!f.isSuccess()) {
-                    if (needsRelease) bb.release();
+                    bb.release();
                     promise.fail(f.cause());
                     return;
                 }
 
                 int res = (int) f.getNow();
 
-                if (bb != slice) {
-                    // Zero-copy path, update the write index to offset + whatever we wrote.
-                    bb.writerIndex(offset + res);
-                } else {
-                    // Copy path. Update indices and write.
-                    try {
+                try {
+                    if (bb != slice) {
+                        // Zero-copy path, update the write index to offset + whatever we wrote.
+                        bb.writerIndex(offset + res);
+                    } else {
+                        // Copy path. Update indices and write.
                         bb.writerIndex(bb.writerIndex() + res);
                         buffer.setBuffer(offset, BufferInternal.buffer(bb));
-                    } finally {
-                        bb.release();
                     }
+                } finally {
+                    bb.release();
                 }
 
                 int remaining = length - res;
 
-                // Partial read
                 if (remaining > 0) {
-                    read(buffer, offset + res, position + res, remaining)
-                        .onComplete(ar -> {
-                            if (ar.failed()) promise.fail(ar.cause());
-                            else promise.complete();
-                        });
+                    doRead(buffer, offset + res, position + res, remaining, promise);
                 } else {
                     promise.complete(buffer);
                 }
             });
-
-        return promise.future();
     }
 
     @Override
@@ -468,7 +463,7 @@ public class IoUringAsyncFileImpl implements AsyncFile {
     public Future<Long> size() {
         checkContext();
         Promise<Long> p = context.promise();
-        ByteBuf statBuffer = Unpooled.directBuffer(256);
+        ByteBuf statBuffer = Buffers.direct(256, true);
         handle
             .statxAsync(NativeConstants.StatxMask.SIZE, 0, statBuffer)
             .addListener((f) -> {

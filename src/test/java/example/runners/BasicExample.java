@@ -1,8 +1,8 @@
 package example.runners;
 
+import io.jiouring.file.Buffers;
 import io.jiouring.file.IoUringFile;
 import io.netty.buffer.ByteBuf;
-import io.netty.buffer.Unpooled;
 import io.netty.channel.IoEventLoop;
 import io.netty.channel.MultiThreadIoEventLoopGroup;
 import io.netty.channel.uring.IoUringIoHandler;
@@ -48,8 +48,8 @@ public class BasicExample implements Runnable {
         ).join();
 
         byte[] data = "hello-io-uring".getBytes(StandardCharsets.UTF_8);
-        ByteBuf writeBuf = Unpooled.directBuffer(data.length).writeBytes(data);
-        ByteBuf readBuf = Unpooled.directBuffer(data.length);
+        ByteBuf writeBuf = Buffers.direct(data.length).writeBytes(data);
+        ByteBuf readBuf = Buffers.direct(data.length);
 
         f.writeAsync(writeBuf, 0, true).join();
         f.readAsync(readBuf, 0).join();

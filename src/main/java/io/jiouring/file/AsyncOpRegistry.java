@@ -18,6 +18,7 @@ class AsyncOpRegistry  {
     private final EventExecutor executor;
     private final OpIdPool opIdPool;
     private final Int2ObjectOpenHashMap<AsyncOpContext> contextLookup;
+    private int generation = 0;
 
     AsyncOpRegistry(EventExecutor executor, int initialCapacity) {
         this.executor = executor;
@@ -39,43 +40,40 @@ class AsyncOpRegistry  {
 
     AsyncOpContext acquire(byte op) {
         short id = opIdPool.acquire(op);
-        AsyncOpContext ctx = new AsyncOpContext(executor, op, id);
+        AsyncOpContext ctx = new AsyncOpContext(executor, op, id, generation);
         contextLookup.put(key(op, id), ctx);
         return ctx;
     }
 
     void complete(IoUringIoEvent event) {
         int key = key(event.opcode(), event.data());
-        AsyncOpContext ctx = contextLookup.get(key);
+        AsyncOpContext ctx = contextLookup.remove(key);
 
         if (ctx == null) {
             logger.error("Completion for event {} failed because it was missing from arena", event);
             return;
         }
 
-        if (ctx.inUse) {
-            ctx.future.trySuccess(event.res());
-            contextLookup.remove(key(ctx.op, ctx.id));
-            opIdPool.release(ctx.op, ctx.id);
-            ctx.inUse = false;
-        }
+        ctx.trySuccess(event.res());
+        opIdPool.release(ctx.op, ctx.id);
     }
 
     void release(AsyncOpContext ctx, Throwable cause) {
-        if (ctx.inUse) {
-            ctx.future.tryFailure(cause);
-            contextLookup.remove(key(ctx.op, ctx.id));
-            opIdPool.release(ctx.op, ctx.id);
-            ctx.inUse = false;
-        }
+        ctx.tryFailure(cause);
+        contextLookup.remove(key(ctx.op, ctx.id));
+        opIdPool.release(ctx.op, ctx.id);
     }
 
-    List<AsyncOpContext> findStuckOps(long timeoutNs) {
-        long now = System.nanoTime();
-        List<AsyncOpContext> stuck = null;
+    List<AsyncOpContext> progress(int generation) {
+        if (generation < this.generation) {
+            throw new IllegalArgumentException("generation < " + this.generation + " (was " + generation + ")");
+        }
 
+        this.generation = generation;
+
+        List<AsyncOpContext> stuck = null;
         for (AsyncOpContext ctx : contextLookup.values()) {
-            if (ctx != null && ctx.inUse && (now - ctx.startTime) > timeoutNs) {
+            if (ctx != null && (generation - ctx.generation) > 30) {
                 if (stuck == null) stuck = new ArrayList<>(4);
                 stuck.add(ctx);
             }

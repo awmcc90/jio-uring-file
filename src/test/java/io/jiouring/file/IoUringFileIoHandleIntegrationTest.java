@@ -168,7 +168,7 @@ class IoUringFileIoHandleIntegrationTest {
         int result = handle.fallocateAsync(0, 4096, 0).sync().getNow();
         assertEquals(0, result);
 
-        ByteBuf statBuf = Buffers.pooledDirect(256);
+        ByteBuf statBuf = Buffers.direct(256);
         handle.statxAsync(NativeConstants.StatxMask.SIZE, 0, statBuf).sync().getNow();
         FileStats stats = new FileStats(statBuf);
         assertTrue(stats.size >= 4096);
@@ -189,7 +189,7 @@ class IoUringFileIoHandleIntegrationTest {
         int result = handle.truncateAsync(500).sync().getNow();
         assertEquals(0, result);
 
-        ByteBuf statBuf = Buffers.pooledDirect(256);
+        ByteBuf statBuf = Buffers.direct(256);
         handle.statxAsync(NativeConstants.StatxMask.SIZE, 0, statBuf).sync().getNow();
         FileStats stats = new FileStats(statBuf);
         assertEquals(500, stats.size);
@@ -235,7 +235,7 @@ class IoUringFileIoHandleIntegrationTest {
         writeBuf.writerIndex(data.length);
         handle.writeAsync(writeBuf, 0, false).sync().getNow();
 
-        ByteBuf statBuf = Buffers.pooledDirect(256);
+        ByteBuf statBuf = Buffers.direct(256);
         int result = handle.statxAsync(NativeConstants.StatxMask.BASIC_STATS, 0, statBuf).sync().getNow();
         assertEquals(0, result);
 
@@ -349,7 +349,7 @@ class IoUringFileIoHandleIntegrationTest {
         ByteBuf buf = Buffers.direct(10);
         buf.writerIndex(10);
 
-        assertThrows(IllegalStateException.class, () -> handle.writeAsync(buf, 0, false).sync().getNow());
+        assertThrows(IOException.class, () -> handle.writeAsync(buf, 0, false).sync().getNow());
 
         buf.release();
     }
@@ -378,7 +378,7 @@ class IoUringFileIoHandleIntegrationTest {
         int written = handle.writeAsync(buf, 0, false).sync().getNow();
         assertEquals(size, written);
 
-        ByteBuf statBuf = Buffers.pooledDirect(256);
+        ByteBuf statBuf = Buffers.direct(256);
         handle.statxAsync(NativeConstants.StatxMask.SIZE, 0, statBuf).sync().getNow();
         FileStats stats = new FileStats(statBuf);
         assertEquals(size, stats.size);
@@ -400,7 +400,7 @@ class IoUringFileIoHandleIntegrationTest {
         int result = handle.fallocateAsync(4096, 4096, mode).sync().getNow();
         assertEquals(0, result);
 
-        ByteBuf statBuf = Buffers.pooledDirect(256);
+        ByteBuf statBuf = Buffers.direct(256);
         handle.statxAsync(NativeConstants.StatxMask.SIZE, 0, statBuf).sync().getNow();
         FileStats stats = new FileStats(statBuf);
         assertEquals(8192, stats.size);
@@ -422,7 +422,7 @@ class IoUringFileIoHandleIntegrationTest {
         handle.writeAsync(buf1, 0, false).sync().getNow();
         handle.writeAsync(buf2, 100, false).sync().getNow();
 
-        ByteBuf statBuf = Buffers.pooledDirect(256);
+        ByteBuf statBuf = Buffers.direct(256);
         handle.statxAsync(NativeConstants.StatxMask.SIZE, 0, statBuf).sync().getNow();
         FileStats stats = new FileStats(statBuf);
         assertEquals(104, stats.size);

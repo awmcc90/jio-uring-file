@@ -17,6 +17,10 @@ mvn clean test-compile exec:exec \
   -Djmh.args="-t 4 -prof gc -prof async:libPath=/opt/profiler/lib/libasyncProfiler.so;output=flamegraph"
 ```
 
+#### Useful notes
+
+Heavy benchmarking might require periodic execution of `sudo fstrim -v /`
+
 ### Run tests
 
 Can selectively run tests by adjusting the `-Dtest` arg

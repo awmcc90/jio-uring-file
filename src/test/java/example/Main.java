@@ -1,6 +1,7 @@
 package example;
 
 import example.runners.BasicExample;
+import example.runners.Jio;
 import example.runners.TransactionalJournal;
 import example.runners.VertxFileSystemRunner;
 import org.slf4j.Logger;
@@ -11,12 +12,11 @@ public class Main {
     private static final Logger logger = LoggerFactory.getLogger(Main.class.getName());
 
     public static void main(String[] args) {
-        logger.info("Ring size: {}", System.getProperty("io.netty.iouring.ringSize"));
-
         Runnable[] runnables = new Runnable[] {
+            new Jio(),
             new VertxFileSystemRunner(),
             //new TransactionalJournal(),
-            //new BasicExample(),
+            new BasicExample(),
         };
 
         for (Runnable runnable : runnables) {

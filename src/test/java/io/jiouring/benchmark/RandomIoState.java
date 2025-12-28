@@ -35,7 +35,7 @@ public class RandomIoState {
         ThreadLocalRandom rnd = ThreadLocalRandom.current();
 
         for (int i = 0; i < batchSize; i++) {
-            buffers[i] = Buffers.alignedByteBuf(bufferSize);
+            buffers[i] = Buffers.alignedDirect(bufferSize);
             nioBuffers[i] = buffers[i].nioBuffer();
 
             // Random aligned offset

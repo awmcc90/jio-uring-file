@@ -226,17 +226,42 @@
                                 <argument>--add-opens=java.base/sun.nio.ch=ALL-UNNAMED</argument>
                                 <argument>--add-opens=java.base/java.nio=ALL-UNNAMED</argument>
                                 <argument>--enable-native-access=ALL-UNNAMED</argument>
+                                <argument>--sun-misc-unsafe-memory-access=allow</argument>
 
                                 <argument>-Xms1G</argument>
                                 <argument>-Xmx1G</argument>
-                                <argument>-XX:+AlwaysPreTouch</argument>
                                 <argument>-XX:+UseParallelGC</argument>
+                                <argument>-XX:+AlwaysPreTouch</argument>
                                 <argument>-XX:MaxDirectMemorySize=2G</argument>
 
+                                <!-- Maybe improves cache locality; depends on its mood -->
+                                <argument>-XX:+UseCompactObjectHeaders</argument>
+
+                                <!-- Aggressive JVM opts
+                                <argument>-XX:InitialCodeCacheSize=512m</argument>
+                                <argument>-XX:ReservedCodeCacheSize=512m</argument>
+                                <argument>-XX:MaxInlineLevel=20</argument>
+                                <argument>-XX:AutoBoxCacheMax=10001</argument>
+                                -->
+
+                                <!-- simple, disabled, paranoid -->
+                                <argument>-Dio.netty.leakDetection.level=simple</argument>
                                 <argument>-Dio.netty.tryReflectionSetAccessible=true</argument>
                                 <argument>-Dio.netty.iouring.ringSize=4096</argument>
                                 <argument>-Dio.netty.noUnsafe=false</argument>
                                 <argument>-Dlog4j2.contextSelector=org.apache.logging.log4j.core.async.AsyncLoggerContextSelector</argument>
+
+                                <!-- Aggressive Netty ops
+                                <argument>-Dio.netty.buffer.checkBounds=false</argument>
+                                <argument>-Dio.netty.buffer.checkAccessible=false</argument>
+                                <argument>-Dio.netty.recycler.maxCapacity.default=0</argument>
+                                <argument>-Dio.netty.maxDirectMemory=0</argument>
+                                -->
+
+                                <!-- Profiling
+                                <argument>-XX:+PreserveFramePointer</argument>
+                                <argument>-agentpath:/opt/profiler/lib/libasyncProfiler.so=start,event=cpu,file=flamegraph.html</argument>
+                                -->
 
                                 <argument>-classpath</argument>
                                 <classpath/>
