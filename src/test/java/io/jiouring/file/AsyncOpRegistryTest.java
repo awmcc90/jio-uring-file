@@ -45,7 +45,7 @@ class AsyncOpRegistryTest {
     void constructorWithSizeZero() {
         AsyncOpRegistry registry = new AsyncOpRegistry(eventLoop, 0);
         assertDoesNotThrow(() -> registry.acquire((byte) 1));
-        assertTrue(registry.canAcquire(NativeConstants.IoRingOp.NOP));
+        assertTrue(registry.canAcquire(NativeConstants.IoUringOp.IORING_OP_NOP));
     }
 
     @Test
@@ -64,8 +64,8 @@ class AsyncOpRegistryTest {
     @Test
     void canAcquireWhenExhausted() {
         AsyncOpRegistry registry = new AsyncOpRegistry(eventLoop);
-        for (int i = 0; i <= 0xFFFF; i++) registry.acquire(NativeConstants.IoRingOp.NOP);
-        assertFalse(registry.canAcquire(NativeConstants.IoRingOp.NOP));
+        for (int i = 0; i <= 0xFFFF; i++) registry.acquire(NativeConstants.IoUringOp.IORING_OP_NOP);
+        assertFalse(registry.canAcquire(NativeConstants.IoUringOp.IORING_OP_NOP));
     }
 
     @Test
@@ -79,8 +79,8 @@ class AsyncOpRegistryTest {
     @Test
     void nextWhenFullThrows() {
         AsyncOpRegistry registry = new AsyncOpRegistry(eventLoop);
-        for (int i = 0; i <= 0xFFFF; i++) registry.acquire(NativeConstants.IoRingOp.NOP);
-        assertThrows(IllegalStateException.class, () -> registry.acquire(NativeConstants.IoRingOp.NOP));
+        for (int i = 0; i <= 0xFFFF; i++) registry.acquire(NativeConstants.IoUringOp.IORING_OP_NOP);
+        assertThrows(IllegalStateException.class, () -> registry.acquire(NativeConstants.IoUringOp.IORING_OP_NOP));
     }
 
     @Test

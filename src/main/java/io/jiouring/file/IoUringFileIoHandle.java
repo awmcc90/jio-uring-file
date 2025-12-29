@@ -59,8 +59,8 @@ public class IoUringFileIoHandle implements IoUringIoHandle {
         this.mode = mode;
         this.contextRegistry = new AsyncOpRegistry(ioEventLoop);
 
-        this.isAnonymous = (flags & NativeConstants.OpenFlags.TMPFILE) == NativeConstants.OpenFlags.TMPFILE;
-        this.isDirectory = !isAnonymous && ((flags & NativeConstants.OpenFlags.DIRECTORY) == NativeConstants.OpenFlags.DIRECTORY);
+        this.isAnonymous = (flags & NativeConstants.OpenFlags.O_TMPFILE) == NativeConstants.OpenFlags.O_TMPFILE;
+        this.isDirectory = !isAnonymous && ((flags & NativeConstants.OpenFlags.O_DIRECTORY) == NativeConstants.OpenFlags.O_DIRECTORY);
 
         this.stuckOpsCleanerTask = ioEventLoop.scheduleAtFixedRate(
             this::checkStuckOps,
@@ -72,6 +72,7 @@ public class IoUringFileIoHandle implements IoUringIoHandle {
 
     private void checkStuckOps() {
         int currentGeneration = ++generation;
+
         List<AsyncOpContext> stuckOps = contextRegistry.progress(currentGeneration);
         if (stuckOps.isEmpty()) {
             return;
@@ -103,8 +104,8 @@ public class IoUringFileIoHandle implements IoUringIoHandle {
         }
 
         if (state == State.CLOSING &&
-            op != NativeConstants.IoRingOp.CLOSE &&
-            op != NativeConstants.IoRingOp.ASYNC_CANCEL) {
+            op != NativeConstants.IoUringOp.IORING_OP_CLOSE &&
+            op != NativeConstants.IoUringOp.IORING_OP_ASYNC_CANCEL) {
             return OpValidationResult.CLOSING_OP_NOT_ALLOWED;
         }
 
@@ -171,7 +172,7 @@ public class IoUringFileIoHandle implements IoUringIoHandle {
         state = State.OPENING;
 
         ByteBuf pathCStr = OpenHelpers.cStr(path);
-        Future<Integer> f = safeSubmit(NativeConstants.IoRingOp.OPENAT, ctx ->
+        Future<Integer> f = safeSubmit(NativeConstants.IoUringOp.IORING_OP_OPENAT, ctx ->
             new IoUringIoOps(
                 ctx.op, (byte) 0, (byte) 0, -1,
                 0L, pathCStr.memoryAddress(), mode, flags,
@@ -199,7 +200,7 @@ public class IoUringFileIoHandle implements IoUringIoHandle {
     }
 
     public Future<Integer> fallocateAsync(long offset, long length, int mode) {
-        return safeSubmit(NativeConstants.IoRingOp.FALLOCATE, ctx ->
+        return safeSubmit(NativeConstants.IoUringOp.IORING_OP_FALLOCATE, ctx ->
             new IoUringIoOps(
                 ctx.op, (byte) 0, (byte) 0, fd,
                 offset, length, mode, 0,
@@ -209,18 +210,18 @@ public class IoUringFileIoHandle implements IoUringIoHandle {
     }
 
     public Future<Integer> writeAsync(ByteBuf buffer, long offset, boolean dsync) {
-        return safeSubmit(NativeConstants.IoRingOp.WRITE, ctx ->
+        return safeSubmit(NativeConstants.IoUringOp.IORING_OP_WRITE, ctx ->
             new IoUringIoOps(
                 ctx.op, (byte) 0, (byte) 0, fd,
                 offset, buffer.memoryAddress(), buffer.readableBytes(),
-                dsync ? NativeConstants.RwFlags.DSYNC : 0,
+                dsync ? NativeConstants.RwFlags.RWF_DSYNC : 0,
                 ctx.id, (short) 0, (short) 0, 0, 0L
             )
         );
     }
 
     public Future<Integer> readAsync(ByteBuf buffer, long offset) {
-        return safeSubmit(NativeConstants.IoRingOp.READ, ctx ->
+        return safeSubmit(NativeConstants.IoUringOp.IORING_OP_READ, ctx ->
             new IoUringIoOps(
                 ctx.op, (byte) 0, (byte) 0, fd,
                 offset, buffer.memoryAddress(), buffer.writableBytes(), 0,
@@ -230,7 +231,7 @@ public class IoUringFileIoHandle implements IoUringIoHandle {
     }
 
     public Future<Integer> readvAsync(IovArray iovArray, long offset) {
-        return safeSubmit(NativeConstants.IoRingOp.READV, ctx ->
+        return safeSubmit(NativeConstants.IoUringOp.IORING_OP_READV, ctx ->
             new IoUringIoOps(
                 ctx.op, (byte) 0, (byte) 0, fd,
                 offset, iovArray.memoryAddress(0), iovArray.count(), 0,
@@ -240,7 +241,7 @@ public class IoUringFileIoHandle implements IoUringIoHandle {
     }
 
     public Future<Integer> writevAsync(IovArray iovArray, long offset) {
-        return safeSubmit(NativeConstants.IoRingOp.WRITEV, ctx ->
+        return safeSubmit(NativeConstants.IoUringOp.IORING_OP_WRITEV, ctx ->
             new IoUringIoOps(
                 ctx.op, (byte) 0, (byte) 0, fd,
                 offset, iovArray.memoryAddress(0), iovArray.count(), 0,
@@ -251,7 +252,7 @@ public class IoUringFileIoHandle implements IoUringIoHandle {
 
     // It goes in the offset slot; that's not a mistake
     public Future<Integer> truncateAsync(long length) {
-        return safeSubmit(NativeConstants.IoRingOp.FTRUNCATE, ctx ->
+        return safeSubmit(NativeConstants.IoUringOp.IORING_OP_FTRUNCATE, ctx ->
             new IoUringIoOps(
                 ctx.op, (byte) 0, (byte) 0, fd,
                 length, 0L, 0, 0,
@@ -261,11 +262,11 @@ public class IoUringFileIoHandle implements IoUringIoHandle {
     }
 
     public Future<Integer> fsyncAsync(boolean isSyncData, int len, long offset) {
-        return safeSubmit(NativeConstants.IoRingOp.FSYNC, ctx ->
+        return safeSubmit(NativeConstants.IoUringOp.IORING_OP_FSYNC, ctx ->
             new IoUringIoOps(
                 ctx.op, (byte) 0, (byte) 0, fd,
                 offset, 0L, len,
-                isSyncData ? NativeConstants.FsyncFlags.DATASYNC : 0,
+                isSyncData ? NativeConstants.FsyncFlags.IORING_FSYNC_DATASYNC : 0,
                 ctx.id, (short) 0, (short) 0, 0, 0L
             )
         );
@@ -273,11 +274,11 @@ public class IoUringFileIoHandle implements IoUringIoHandle {
 
     public Future<Integer> unlinkAsync() {
         ByteBuf pathCStr = OpenHelpers.cStr(path);
-        Future<Integer> f = safeSubmit(NativeConstants.IoRingOp.UNLINKAT, ctx ->
+        Future<Integer> f = safeSubmit(NativeConstants.IoUringOp.IORING_OP_UNLINKAT, ctx ->
             new IoUringIoOps(
                 ctx.op, (byte) 0, (byte) 0, -1,
                 0L, pathCStr.memoryAddress(), 0,
-                isDirectory ? NativeConstants.AtFlags.AT_REMOVEDIR : 0,
+                isDirectory ? NativeConstants.UnlinkAtFlags.AT_REMOVEDIR : 0,
                 ctx.id, (short) 0, (short) 0, 0, 0L
             )
         );
@@ -287,7 +288,7 @@ public class IoUringFileIoHandle implements IoUringIoHandle {
 
     public Future<Integer> statxAsync(int mask, int flags, ByteBuf statxBuffer) {
         ByteBuf pathCStr = OpenHelpers.cStr(path);
-        Future<Integer> f = safeSubmit(NativeConstants.IoRingOp.STATX, ctx ->
+        Future<Integer> f = safeSubmit(NativeConstants.IoUringOp.IORING_OP_STATX, ctx ->
             new IoUringIoOps(
                 ctx.op, (byte) 0, (byte) 0, NativeConstants.AtFlags.AT_FDCWD,
                 statxBuffer.memoryAddress(), pathCStr.memoryAddress(), mask, flags,
@@ -298,11 +299,21 @@ public class IoUringFileIoHandle implements IoUringIoHandle {
         return f;
     }
 
+    public Future<Integer> spliceTo(IoUringFileIoHandle target, int len, long srcOffset, long dstOffset, int flags) {
+        return safeSubmit(NativeConstants.IoUringOp.IORING_OP_SPLICE, ctx ->
+            new IoUringIoOps(
+                ctx.op, (byte) 0, (byte) 0, target.fd,
+                dstOffset, srcOffset, len, flags,
+                ctx.id, (short) 0, (short) 0, this.fd, 0L
+            )
+        );
+    }
+
     private void cancelAsync(long uringId) {
-        safeSubmit(NativeConstants.IoRingOp.ASYNC_CANCEL, ctx ->
+        safeSubmit(NativeConstants.IoUringOp.IORING_OP_ASYNC_CANCEL, ctx ->
             new IoUringIoOps(
                 ctx.op, (byte) 0, (byte) 0, -1,
-                0L, uringId, 0, 0,
+                0L, uringId, 0, NativeConstants.AsyncCancelFlags.IORING_ASYNC_CANCEL_USERDATA,
                 ctx.id, (short) 0, (short) 0, 0, 0L
             )
         );
@@ -313,11 +324,11 @@ public class IoUringFileIoHandle implements IoUringIoHandle {
             return ioEventLoop.newSucceededFuture(0);
         }
 
-        return safeSubmit(NativeConstants.IoRingOp.ASYNC_CANCEL, ctx ->
+        return safeSubmit(NativeConstants.IoUringOp.IORING_OP_ASYNC_CANCEL, ctx ->
             new IoUringIoOps(
                 ctx.op, (byte) 0, (byte) 0, fd,
                 0L, 0L, 0,
-                NativeConstants.AsyncCancelFlags.ALL | NativeConstants.AsyncCancelFlags.FD,
+                NativeConstants.AsyncCancelFlags.IORING_ASYNC_CANCEL_ALL | NativeConstants.AsyncCancelFlags.IORING_ASYNC_CANCEL_FD,
                 ctx.id, (short) 0, (short) 0, 0, 0L
             )
         );
@@ -328,7 +339,7 @@ public class IoUringFileIoHandle implements IoUringIoHandle {
             return;
         }
 
-        Future<Integer> f = safeSubmit(NativeConstants.IoRingOp.CLOSE, ctx ->
+        Future<Integer> f = safeSubmit(NativeConstants.IoUringOp.IORING_OP_CLOSE, ctx ->
             new IoUringIoOps(
                 ctx.op, (byte) 0, (byte) 0, fd,
                 0L, 0L, 0, 0,
@@ -355,8 +366,8 @@ public class IoUringFileIoHandle implements IoUringIoHandle {
     }
 
     public Future<Integer> closeAsync() {
-        if (state == State.FAILED || state == State.CLOSED) {
-            logger.debug("Close called on handle in state {}", state);
+        if (state != State.OPEN) {
+            logger.debug("Close can only be called from OPEN state (current={})", state);
             return ioEventLoop.newSucceededFuture(0);
         }
 
@@ -510,15 +521,15 @@ public class IoUringFileIoHandle implements IoUringIoHandle {
         Path tmpDir = Paths.get(System.getProperty("java.io.tmpdir"));
         int userFlags = OpenHelpers.openFlags(options);
 
-        boolean hasWrite = (userFlags & NativeConstants.OpenFlags.WRONLY) != 0 ||
-            (userFlags & NativeConstants.OpenFlags.RDWR) != 0;
+        boolean hasWrite = (userFlags & NativeConstants.OpenFlags.O_WRONLY) != 0 ||
+            (userFlags & NativeConstants.OpenFlags.O_RDWR) != 0;
 
-        int mandatoryAccess = hasWrite ? 0 : NativeConstants.OpenFlags.RDWR;
+        int mandatoryAccess = hasWrite ? 0 : NativeConstants.OpenFlags.O_RDWR;
 
-        int finalFlags = userFlags | NativeConstants.OpenFlags.TMPFILE | mandatoryAccess;
+        int finalFlags = userFlags | NativeConstants.OpenFlags.O_TMPFILE | mandatoryAccess;
 
         int mode = OpenHelpers.fileMode(attrs);
-        if (mode == NativeConstants.FileMode.DEFAULT_FILE && attrs.length == 0) {
+        if (mode == NativeConstants.FileMode.DEFAULT_FILE_PERMS && attrs.length == 0) {
             mode = NativeConstants.FileMode.S_IRUSR | NativeConstants.FileMode.S_IWUSR;
         }
 

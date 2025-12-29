@@ -6,7 +6,6 @@ import io.netty.buffer.ByteBuf;
 import io.netty.channel.IoEventLoop;
 import io.netty.channel.MultiThreadIoEventLoopGroup;
 import io.netty.channel.uring.IoUringIoHandler;
-import io.netty.util.ReferenceCountUtil;
 import io.netty.util.concurrent.DefaultThreadFactory;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -43,7 +42,6 @@ public class TransactionalJournal implements Runnable {
             .whenComplete((file, err) -> {
                 if (err != null) promise.completeExceptionally(err);
                 else {
-                    worker.submit(() -> runInternal(file, promise));
                     promise
                         .whenComplete((ignored1, t) -> file
                             .closeAsync()
@@ -51,6 +49,7 @@ public class TransactionalJournal implements Runnable {
                                 Throwable finalErr = t != null ? t : tt;
                                 shutdown(group, worker, promise, finalErr);
                             }));
+                    worker.submit(() -> runInternal(file, promise));
                 }
             });
 
@@ -105,21 +104,21 @@ public class TransactionalJournal implements Runnable {
                 backpressure.acquire();
 
                 long fileOffset = i * batchSize;
-                ByteBuf buffer = Buffers.direct(batchSize);
+                ByteBuf bb = Buffers.direct(batchSize);
 
                 for (int r = 0; r < recordsPerBatch; r++) {
                     long recordId = (i * recordsPerBatch) + r;
-                    buffer.writeLong(recordId);
-                    buffer.writeDouble(99.99);
-                    buffer.writeLong(System.nanoTime());
-                    buffer.writeZero(recordSize - 24); // Padding
+                    bb.writeLong(recordId);
+                    bb.writeDouble(99.99);
+                    bb.writeLong(System.nanoTime());
+                    bb.writeZero(recordSize - 24); // Padding
                 }
 
                 try {
                     file
-                        .writeAsync(buffer, fileOffset)
+                        .writeAsync(bb, fileOffset)
                         .handle((res, err) -> {
-                            buffer.release();
+                            bb.release();
                             backpressure.release();
 
                             if (err != null) promise.completeExceptionally(err);
@@ -134,7 +133,7 @@ public class TransactionalJournal implements Runnable {
                             return null;
                         });
                 } catch (Exception t) {
-                    ReferenceCountUtil.release(buffer);
+                    if (bb.refCnt() > 0) bb.release();
                     backpressure.release();
                     promise.completeExceptionally(t);
                 }

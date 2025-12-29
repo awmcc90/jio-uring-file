@@ -169,7 +169,7 @@ class IoUringFileIoHandleIntegrationTest {
         assertEquals(0, result);
 
         ByteBuf statBuf = Buffers.direct(256);
-        handle.statxAsync(NativeConstants.StatxMask.SIZE, 0, statBuf).sync().getNow();
+        handle.statxAsync(NativeConstants.StatxMask.STATX_SIZE, 0, statBuf).sync().getNow();
         FileStats stats = new FileStats(statBuf);
         assertTrue(stats.size >= 4096);
 
@@ -190,7 +190,7 @@ class IoUringFileIoHandleIntegrationTest {
         assertEquals(0, result);
 
         ByteBuf statBuf = Buffers.direct(256);
-        handle.statxAsync(NativeConstants.StatxMask.SIZE, 0, statBuf).sync().getNow();
+        handle.statxAsync(NativeConstants.StatxMask.STATX_SIZE, 0, statBuf).sync().getNow();
         FileStats stats = new FileStats(statBuf);
         assertEquals(500, stats.size);
 
@@ -236,7 +236,7 @@ class IoUringFileIoHandleIntegrationTest {
         handle.writeAsync(writeBuf, 0, false).sync().getNow();
 
         ByteBuf statBuf = Buffers.direct(256);
-        int result = handle.statxAsync(NativeConstants.StatxMask.BASIC_STATS, 0, statBuf).sync().getNow();
+        int result = handle.statxAsync(NativeConstants.StatxMask.STATX_BASIC_STATS, 0, statBuf).sync().getNow();
         assertEquals(0, result);
 
         FileStats stats = new FileStats(statBuf);
@@ -379,7 +379,7 @@ class IoUringFileIoHandleIntegrationTest {
         assertEquals(size, written);
 
         ByteBuf statBuf = Buffers.direct(256);
-        handle.statxAsync(NativeConstants.StatxMask.SIZE, 0, statBuf).sync().getNow();
+        handle.statxAsync(NativeConstants.StatxMask.STATX_SIZE, 0, statBuf).sync().getNow();
         FileStats stats = new FileStats(statBuf);
         assertEquals(size, stats.size);
 
@@ -396,12 +396,12 @@ class IoUringFileIoHandleIntegrationTest {
         ByteBuf buf = Buffers.direct(data);
         handle.writeAsync(buf, 0, false).sync().getNow();
 
-        int mode = NativeConstants.FallocateFlags.PUNCH_HOLE | NativeConstants.FallocateFlags.KEEP_SIZE;
+        int mode = NativeConstants.FallocateFlags.FALLOC_FL_PUNCH_HOLE | NativeConstants.FallocateFlags.FALLOC_FL_KEEP_SIZE;
         int result = handle.fallocateAsync(4096, 4096, mode).sync().getNow();
         assertEquals(0, result);
 
         ByteBuf statBuf = Buffers.direct(256);
-        handle.statxAsync(NativeConstants.StatxMask.SIZE, 0, statBuf).sync().getNow();
+        handle.statxAsync(NativeConstants.StatxMask.STATX_SIZE, 0, statBuf).sync().getNow();
         FileStats stats = new FileStats(statBuf);
         assertEquals(8192, stats.size);
 
@@ -423,7 +423,7 @@ class IoUringFileIoHandleIntegrationTest {
         handle.writeAsync(buf2, 100, false).sync().getNow();
 
         ByteBuf statBuf = Buffers.direct(256);
-        handle.statxAsync(NativeConstants.StatxMask.SIZE, 0, statBuf).sync().getNow();
+        handle.statxAsync(NativeConstants.StatxMask.STATX_SIZE, 0, statBuf).sync().getNow();
         FileStats stats = new FileStats(statBuf);
         assertEquals(104, stats.size);
 

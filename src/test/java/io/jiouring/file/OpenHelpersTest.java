@@ -8,7 +8,6 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.LinkOption;
 import java.nio.file.OpenOption;
 import java.nio.file.Path;
-import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.FileAttribute;
 import java.nio.file.attribute.PosixFilePermission;
 import java.nio.file.attribute.PosixFilePermissions;
@@ -78,88 +77,88 @@ class OpenHelpersTest {
     @Test
     void openFlagsDefaultsToReadOnly() {
         int flags = OpenHelpers.openFlags();
-        assertEquals(NativeConstants.OpenFlags.RDONLY, flags);
+        assertEquals(NativeConstants.OpenFlags.O_RDONLY, flags);
     }
 
     @Test
     void openFlagsReadOnly() {
         int flags = OpenHelpers.openFlags(READ);
-        assertEquals(NativeConstants.OpenFlags.RDONLY, flags);
+        assertEquals(NativeConstants.OpenFlags.O_RDONLY, flags);
     }
 
     @Test
     void openFlagsWriteOnly() {
         int flags = OpenHelpers.openFlags(WRITE);
-        assertEquals(NativeConstants.OpenFlags.WRONLY, flags);
+        assertEquals(NativeConstants.OpenFlags.O_WRONLY, flags);
     }
 
     @Test
     void openFlagsReadWrite() {
         int flags = OpenHelpers.openFlags(READ, WRITE);
-        assertEquals(NativeConstants.OpenFlags.RDWR, flags);
+        assertEquals(NativeConstants.OpenFlags.O_RDWR, flags);
     }
 
     @Test
     void openFlagsWriteReadOrder() {
         int flags = OpenHelpers.openFlags(WRITE, READ);
-        assertEquals(NativeConstants.OpenFlags.RDWR, flags);
+        assertEquals(NativeConstants.OpenFlags.O_RDWR, flags);
     }
 
     @Test
     void openFlagsAppend() {
         int flags = OpenHelpers.openFlags(APPEND);
-        assertTrue((flags & NativeConstants.OpenFlags.APPEND) != 0);
+        assertTrue((flags & NativeConstants.OpenFlags.O_APPEND) != 0);
     }
 
     @Test
     void openFlagsTruncate() {
         int flags = OpenHelpers.openFlags(TRUNCATE_EXISTING);
-        assertTrue((flags & NativeConstants.OpenFlags.TRUNC) != 0);
+        assertTrue((flags & NativeConstants.OpenFlags.O_TRUNC) != 0);
     }
 
     @Test
     void openFlagsCreate() {
         int flags = OpenHelpers.openFlags(CREATE);
-        assertTrue((flags & NativeConstants.OpenFlags.CREAT) != 0);
+        assertTrue((flags & NativeConstants.OpenFlags.O_CREAT) != 0);
     }
 
     @Test
     void openFlagsCreateNew() {
         int flags = OpenHelpers.openFlags(CREATE_NEW);
-        assertTrue((flags & NativeConstants.OpenFlags.CREAT) != 0);
-        assertTrue((flags & NativeConstants.OpenFlags.EXCL) != 0);
+        assertTrue((flags & NativeConstants.OpenFlags.O_CREAT) != 0);
+        assertTrue((flags & NativeConstants.OpenFlags.O_EXCL) != 0);
     }
 
     @Test
     void openFlagsSync() {
         int flags = OpenHelpers.openFlags(SYNC);
-        assertTrue((flags & NativeConstants.OpenFlags.SYNC) != 0);
+        assertTrue((flags & NativeConstants.OpenFlags.O_SYNC) != 0);
     }
 
     @Test
     void openFlagsDsync() {
         int flags = OpenHelpers.openFlags(DSYNC);
-        assertTrue((flags & NativeConstants.OpenFlags.DSYNC) != 0);
+        assertTrue((flags & NativeConstants.OpenFlags.O_DSYNC) != 0);
     }
 
     @Test
     void openFlagsDirect() {
         int flags = OpenHelpers.openFlags(ExtendedOpenOption.DIRECT);
-        assertTrue((flags & NativeConstants.OpenFlags.DIRECT) != 0);
+        assertTrue((flags & NativeConstants.OpenFlags.O_DIRECT) != 0);
     }
 
     @Test
     void openFlagsNofollow() {
         int flags = OpenHelpers.openFlags(LinkOption.NOFOLLOW_LINKS);
-        assertTrue((flags & NativeConstants.OpenFlags.NOFOLLOW) != 0);
+        assertTrue((flags & NativeConstants.OpenFlags.O_NOFOLLOW) != 0);
     }
 
     @Test
     void openFlagsCombined() {
         int flags = OpenHelpers.openFlags(READ, WRITE, CREATE, TRUNCATE_EXISTING);
-        assertEquals(NativeConstants.OpenFlags.RDWR, flags & 0x3);
-        assertTrue((flags & NativeConstants.OpenFlags.CREAT) != 0);
-        assertTrue((flags & NativeConstants.OpenFlags.TRUNC) != 0);
+        assertEquals(NativeConstants.OpenFlags.O_RDWR, flags & 0x3);
+        assertTrue((flags & NativeConstants.OpenFlags.O_CREAT) != 0);
+        assertTrue((flags & NativeConstants.OpenFlags.O_TRUNC) != 0);
     }
 
     @Test
@@ -184,7 +183,7 @@ class OpenHelpersTest {
     @Test
     void fileModeDefaultWithNoAttributes() {
         int mode = OpenHelpers.fileMode();
-        assertEquals(NativeConstants.FileMode.DEFAULT_FILE, mode);
+        assertEquals(NativeConstants.FileMode.DEFAULT_FILE_PERMS, mode);
     }
 
     @Test
@@ -306,7 +305,7 @@ class OpenHelpersTest {
             @Override public String value() { return "value"; }
         };
         int mode = OpenHelpers.fileMode(other);
-        assertEquals(NativeConstants.FileMode.DEFAULT_FILE, mode);
+        assertEquals(NativeConstants.FileMode.DEFAULT_FILE_PERMS, mode);
     }
 
     @Test

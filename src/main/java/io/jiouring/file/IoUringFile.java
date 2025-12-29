@@ -136,14 +136,14 @@ public class IoUringFile implements AutoCloseable {
     }
 
     public CompletableFuture<Integer> allocate(long offset, long length) {
-        return fallocate(offset, length, 0);
+        return fallocate(offset, length, NativeConstants.FallocateFlags.FALLOC_FL_ALLOCATE_RANGE);
     }
 
     public CompletableFuture<Integer> punchHole(long offset, long length) {
         return fallocate(
             offset,
             length,
-            NativeConstants.FallocateFlags.PUNCH_HOLE | NativeConstants.FallocateFlags.KEEP_SIZE
+            NativeConstants.FallocateFlags.FALLOC_FL_PUNCH_HOLE | NativeConstants.FallocateFlags.FALLOC_FL_KEEP_SIZE
         );
     }
 
@@ -188,8 +188,8 @@ public class IoUringFile implements AutoCloseable {
 
     public CompletableFuture<FileStats> stat() {
         return stat(
-            NativeConstants.StatxMask.BASIC_STATS,
-            NativeConstants.StatxFlags.AT_SYNC_AS_STAT
+            NativeConstants.StatxMask.STATX_BASIC_STATS,
+            NativeConstants.StatxFlags.AT_STATX_SYNC_AS_STAT
         );
     }
 

@@ -10,5 +10,5 @@ import java.lang.annotation.ElementType;
 @Target({ElementType.METHOD, ElementType.TYPE})
 @ExtendWith(KernelVersionCondition.class)
 public @interface RequiresKernel {
-    String value(); // e.g. "6.9"
+    String value();
 }

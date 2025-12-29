@@ -84,7 +84,7 @@ public final class Buffers {
 
             return aligned;
         } catch (Throwable t) {
-            bb.release();
+            if (bb.refCnt() > 0) bb.release();
             throw t;
         }
     }

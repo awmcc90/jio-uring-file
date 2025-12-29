@@ -14,6 +14,7 @@ import java.util.List;
 class AsyncOpRegistry  {
 
     private static final Logger logger = LoggerFactory.getLogger(AsyncOpRegistry.class);
+    private static final int MAX_GENERATION_GAP = 30;
 
     private final EventExecutor executor;
     private final OpIdPool opIdPool;
@@ -65,15 +66,15 @@ class AsyncOpRegistry  {
     }
 
     List<AsyncOpContext> progress(int generation) {
-        if (generation < this.generation) {
-            throw new IllegalArgumentException("generation < " + this.generation + " (was " + generation + ")");
+        if (generation <= this.generation) {
+            throw new IllegalArgumentException("generation <= " + this.generation + " (was " + generation + ")");
         }
 
         this.generation = generation;
 
         List<AsyncOpContext> stuck = null;
         for (AsyncOpContext ctx : contextLookup.values()) {
-            if (ctx != null && (generation - ctx.generation) > 30) {
+            if (ctx != null && (generation - ctx.generation) > MAX_GENERATION_GAP) {
                 if (stuck == null) stuck = new ArrayList<>(4);
                 stuck.add(ctx);
             }

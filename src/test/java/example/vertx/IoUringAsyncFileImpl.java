@@ -315,7 +315,7 @@ public class IoUringAsyncFileImpl implements AsyncFile {
     @Override
     public boolean writeQueueFull() {
         checkContext();
-        return writesOutstandingBytes >= maxWrites || !handle.permit(NativeConstants.IoRingOp.WRITE);
+        return writesOutstandingBytes >= maxWrites || !handle.permit(NativeConstants.IoUringOp.IORING_OP_WRITE);
     }
 
     @Override
@@ -465,7 +465,7 @@ public class IoUringAsyncFileImpl implements AsyncFile {
         Promise<Long> p = context.promise();
         ByteBuf statBuffer = Buffers.direct(256, true);
         handle
-            .statxAsync(NativeConstants.StatxMask.SIZE, 0, statBuffer)
+            .statxAsync(NativeConstants.StatxMask.STATX_SIZE, 0, statBuffer)
             .addListener((f) -> {
                 if (!f.isSuccess()) {
                     statBuffer.release();
