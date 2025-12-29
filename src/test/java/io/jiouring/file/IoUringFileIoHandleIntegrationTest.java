@@ -206,7 +206,7 @@ class IoUringFileIoHandleIntegrationTest {
         ByteBuf buf = Buffers.direct(data);
         handle.writeAsync(buf, 0, false).sync().getNow();
 
-        int result = handle.fsyncAsync(false, 0, 0).sync().getNow();
+        int result = handle.fsyncAsync(false).sync().getNow();
         assertEquals(0, result);
 
         buf.release();
@@ -220,7 +220,7 @@ class IoUringFileIoHandleIntegrationTest {
         ByteBuf buf = Buffers.direct(data);
         handle.writeAsync(buf, 0, false).sync().getNow();
 
-        int result = handle.fsyncAsync(true, 0, 0).sync().getNow();
+        int result = handle.fsyncAsync(true).sync().getNow();
         assertEquals(0, result);
 
         buf.release();

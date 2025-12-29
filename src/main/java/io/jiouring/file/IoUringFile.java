@@ -159,15 +159,15 @@ public class IoUringFile implements AutoCloseable {
         return promise;
     }
 
-    public CompletableFuture<Integer> fsync(boolean isSyncData, int len, long offset) {
+    public CompletableFuture<Integer> fsync(boolean isSyncData) {
         CompletableFuture<Integer> promise = new CompletableFuture<>();
-        AsyncUtils.completeFrom(promise, ioUringIoHandle.fsyncAsync(isSyncData, len, offset));
+        AsyncUtils.completeFrom(promise, ioUringIoHandle.fsyncAsync(isSyncData));
         return promise;
     }
 
     // Default fsync (entire file, sync metadata too)
     public CompletableFuture<Integer> fsync() {
-        return fsync(false, 0, 0);
+        return fsync(false);
     }
 
     // Delete = unlink() + close()

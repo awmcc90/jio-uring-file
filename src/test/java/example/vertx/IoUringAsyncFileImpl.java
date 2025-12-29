@@ -403,7 +403,7 @@ public class IoUringAsyncFileImpl implements AsyncFile {
         Promise<Void> p = context.promise();
 
         handle
-            .fsyncAsync(false, 0, 0)
+            .fsyncAsync(false)
             .addListener((f) -> {
                 if (!f.isSuccess()) p.fail(f.cause());
                 else p.complete();
@@ -463,7 +463,7 @@ public class IoUringAsyncFileImpl implements AsyncFile {
     public Future<Long> size() {
         checkContext();
         Promise<Long> p = context.promise();
-        ByteBuf statBuffer = Buffers.direct(256, true);
+        ByteBuf statBuffer = Buffers.direct(256);
         handle
             .statxAsync(NativeConstants.StatxMask.STATX_SIZE, 0, statBuffer)
             .addListener((f) -> {

@@ -228,11 +228,11 @@
                                 <argument>--enable-native-access=ALL-UNNAMED</argument>
                                 <argument>--sun-misc-unsafe-memory-access=allow</argument>
 
-                                <argument>-Xms1G</argument>
-                                <argument>-Xmx1G</argument>
+                                <argument>-Xms4G</argument>
+                                <argument>-Xmx4G</argument>
                                 <argument>-XX:+UseParallelGC</argument>
                                 <argument>-XX:+AlwaysPreTouch</argument>
-                                <argument>-XX:MaxDirectMemorySize=2G</argument>
+                                <argument>-XX:MaxDirectMemorySize=8G</argument>
 
                                 <!-- Maybe improves cache locality; depends on its mood -->
                                 <argument>-XX:+UseCompactObjectHeaders</argument>

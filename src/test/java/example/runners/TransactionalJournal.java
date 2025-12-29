@@ -1,7 +1,8 @@
 package example.runners;
 
 import io.jiouring.file.Buffers;
-import io.jiouring.file.IoUringFile;
+import io.jiouring.file.IoUringFileIoHandle;
+import io.jiouring.file.NativeConstants;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.IoEventLoop;
 import io.netty.channel.MultiThreadIoEventLoopGroup;
@@ -10,11 +11,18 @@ import io.netty.util.concurrent.DefaultThreadFactory;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicLong;
+
+import static java.nio.file.StandardOpenOption.CREATE_NEW;
+import static java.nio.file.StandardOpenOption.READ;
+import static java.nio.file.StandardOpenOption.WRITE;
 
 public class TransactionalJournal implements Runnable {
 
@@ -22,10 +30,14 @@ public class TransactionalJournal implements Runnable {
 
     @Override
     public void run() {
-        runAsync().join();
+        try {
+            runAsync().join();
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
     }
 
-    private static CompletableFuture<Void> runAsync() {
+    private static CompletableFuture<Void> runAsync() throws IOException {
         MultiThreadIoEventLoopGroup group = new MultiThreadIoEventLoopGroup(1, IoUringIoHandler.newFactory());
         IoEventLoop loop = group.next();
 
@@ -34,19 +46,21 @@ public class TransactionalJournal implements Runnable {
         );
 
         logger.info("Starting journal engine...");
+        Path path = Path.of("transactional_journal.dat");
+        Files.deleteIfExists(path);
 
         CompletableFuture<Void> promise = new CompletableFuture<>();
 
-        IoUringFile
-            .createTempFile(loop)
+        IoUringFileIoHandle
+            .open(path, loop, READ, WRITE, CREATE_NEW)
             .whenComplete((file, err) -> {
                 if (err != null) promise.completeExceptionally(err);
                 else {
                     promise
                         .whenComplete((ignored1, t) -> file
                             .closeAsync()
-                            .whenComplete((ignored2, tt) -> {
-                                Throwable finalErr = t != null ? t : tt;
+                            .addListener((f) -> {
+                                Throwable finalErr = t != null ? t : f.cause();
                                 shutdown(group, worker, promise, finalErr);
                             }));
                     worker.submit(() -> runInternal(file, promise));
@@ -80,16 +94,16 @@ public class TransactionalJournal implements Runnable {
         });
     }
 
-    private static CompletableFuture<Void> runInternal(IoUringFile file, CompletableFuture<Void> promise) {
+    private static CompletableFuture<Void> runInternal(IoUringFileIoHandle file, CompletableFuture<Void> promise) {
         long totalRecords = 100 * 1024 * 1024;
         long logBatch = 40 * 1024;
         int recordSize = 128;
-        int recordsPerBatch = 128;
+        int recordsPerBatch = 65536;
         int batchSize = recordSize * recordsPerBatch;
 
         long totalBatches = totalRecords / recordsPerBatch;
         long actualTotalRecords = totalBatches * recordsPerBatch;
-        int maxInFlightBatches = 4096;
+        int maxInFlightBatches = 256;
 
         AtomicLong completedBatches = new AtomicLong(0);
         Semaphore backpressure = new Semaphore(maxInFlightBatches);
@@ -116,12 +130,16 @@ public class TransactionalJournal implements Runnable {
 
                 try {
                     file
-                        .writeAsync(bb, fileOffset)
-                        .handle((res, err) -> {
+                        .writeAsync(bb, fileOffset, false)
+                        .addListener((f) -> {
                             bb.release();
                             backpressure.release();
 
-                            if (err != null) promise.completeExceptionally(err);
+                            // Sync the range and forget it
+                            file.syncRangeAsync(fileOffset, batchSize, NativeConstants.SyncFileRangeFlags.SYNC_FILE_RANGE_WRITE_AND_WAIT);
+                            file.fadviseAsync(fileOffset, batchSize, NativeConstants.FadviseAdvice.POSIX_FADV_DONTNEED);
+
+                            if (!f.isSuccess()) promise.completeExceptionally(f.cause());
                             else {
                                 long c = completedBatches.incrementAndGet();
                                 if (c % logBatch == 0L) {
@@ -130,7 +148,6 @@ public class TransactionalJournal implements Runnable {
                                 }
                                 if (c == totalBatches) promise.complete(null);
                             }
-                            return null;
                         });
                 } catch (Exception t) {
                     if (bb.refCnt() > 0) bb.release();
@@ -158,7 +175,6 @@ public class TransactionalJournal implements Runnable {
             logger.info("Throughput:  {} MB/s", throughput);
             logger.info("-------------------------");
         })
-        .thenCompose(ignored -> file.fsync())
         .thenAccept(ignored -> {});
     }
 }

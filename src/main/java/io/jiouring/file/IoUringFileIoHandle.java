@@ -261,11 +261,21 @@ public class IoUringFileIoHandle implements IoUringIoHandle {
         );
     }
 
-    public Future<Integer> fsyncAsync(boolean isSyncData, int len, long offset) {
+    public Future<Integer> syncRangeAsync(long offset, int length, int flags) {
+        return safeSubmit(NativeConstants.IoUringOp.IORING_OP_SYNC_FILE_RANGE, ctx ->
+            new IoUringIoOps(
+                ctx.op, (byte) 0, (byte) 0, fd,
+                offset, 0L, length, flags,
+                ctx.id, (short) 0, (short) 0, 0, 0L
+            )
+        );
+    }
+
+    public Future<Integer> fsyncAsync(boolean isSyncData) {
         return safeSubmit(NativeConstants.IoUringOp.IORING_OP_FSYNC, ctx ->
             new IoUringIoOps(
                 ctx.op, (byte) 0, (byte) 0, fd,
-                offset, 0L, len,
+                0, 0L, 0,
                 isSyncData ? NativeConstants.FsyncFlags.IORING_FSYNC_DATASYNC : 0,
                 ctx.id, (short) 0, (short) 0, 0, 0L
             )
@@ -299,18 +309,18 @@ public class IoUringFileIoHandle implements IoUringIoHandle {
         return f;
     }
 
-    public Future<Integer> spliceTo(IoUringFileIoHandle target, int len, long srcOffset, long dstOffset, int flags) {
-        return safeSubmit(NativeConstants.IoUringOp.IORING_OP_SPLICE, ctx ->
+    public Future<Integer> fadviseAsync(long offset, int length, int advice) {
+        return safeSubmit(NativeConstants.IoUringOp.IORING_OP_FADVISE, ctx ->
             new IoUringIoOps(
-                ctx.op, (byte) 0, (byte) 0, target.fd,
-                dstOffset, srcOffset, len, flags,
-                ctx.id, (short) 0, (short) 0, this.fd, 0L
+                ctx.op, (byte) 0, (byte) 0, fd,
+                offset, 0, length, advice,
+                ctx.id, (short) 0, (short) 0, 0, 0L
             )
         );
     }
 
-    private void cancelAsync(long uringId) {
-        safeSubmit(NativeConstants.IoUringOp.IORING_OP_ASYNC_CANCEL, ctx ->
+    private Future<Integer> cancelAsync(long uringId) {
+        return safeSubmit(NativeConstants.IoUringOp.IORING_OP_ASYNC_CANCEL, ctx ->
             new IoUringIoOps(
                 ctx.op, (byte) 0, (byte) 0, -1,
                 0L, uringId, 0, NativeConstants.AsyncCancelFlags.IORING_ASYNC_CANCEL_USERDATA,
@@ -328,7 +338,7 @@ public class IoUringFileIoHandle implements IoUringIoHandle {
             new IoUringIoOps(
                 ctx.op, (byte) 0, (byte) 0, fd,
                 0L, 0L, 0,
-                NativeConstants.AsyncCancelFlags.IORING_ASYNC_CANCEL_ALL | NativeConstants.AsyncCancelFlags.IORING_ASYNC_CANCEL_FD,
+                NativeConstants.AsyncCancelFlags.IORING_ASYNC_CANCEL_FD,
                 ctx.id, (short) 0, (short) 0, 0, 0L
             )
         );

@@ -270,7 +270,7 @@ class IoUringFileIntegrationTest {
         ByteBuf buf = Buffers.direct(data);
         file.writeAsync(buf, 0).get();
 
-        int result = file.fsync(true, 0, 0).get();
+        int result = file.fsync(true).get();
         assertEquals(0, result);
 
         buf.release();

@@ -13,10 +13,10 @@ public class Main {
 
     public static void main(String[] args) {
         Runnable[] runnables = new Runnable[] {
-            new Jio(),
-            new VertxFileSystemRunner(),
-            //new TransactionalJournal(),
-            new BasicExample(),
+            //new Jio(),
+            //new VertxFileSystemRunner(),
+            new TransactionalJournal(),
+            //new BasicExample(),
         };
 
         for (Runnable runnable : runnables) {

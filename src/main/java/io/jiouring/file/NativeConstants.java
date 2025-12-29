@@ -92,9 +92,9 @@ public final class NativeConstants {
         public static final int O_NONBLOCK = 0x0800;
 
         // Sync / async
-        public static final int O_DSYNC    = 0x1000;
-        public static final int FASYNC     = 0x2000;
-        public static final int O_DIRECT   = 0x4000;
+        public static final int O_DSYNC  = 0x1000;
+        public static final int FASYNC   = 0x2000;
+        public static final int O_DIRECT = 0x4000;
 
         // Large / path semantics
         public static final int O_LARGEFILE = 0x08000;
@@ -150,7 +150,7 @@ public final class NativeConstants {
 
         // Common defaults (permissions only)
         public static final int DEFAULT_FILE_PERMS = S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH; // 0644
-        public static final int DEFAULT_DIR_PERMS = S_IRWXU | S_IRGRP | S_IXGRP | S_IROTH | S_IXOTH; // 0755
+        public static final int DEFAULT_DIR_PERMS  = S_IRWXU | S_IRGRP | S_IXGRP | S_IROTH | S_IXOTH; // 0755
     }
 
     // https://github.com/torvalds/linux/blob/f8f9c1f4d0c7a64600e2ca312dec824a0bc2f1da/include/uapi/linux/fs.h#L411
@@ -237,17 +237,24 @@ public final class NativeConstants {
     public static final class StatxFlags {
         private StatxFlags() {}
 
-        public static final int AT_STATX_SYNC_AS_STAT     = 0x0000;
-        public static final int AT_STATX_FORCE_SYNC       = 0x2000;
-        public static final int AT_STATX_DONT_SYNC        = 0x4000;
-        public static final int AT_STATX_SYNC_TYPE        = 0x6000;
-        public static final int AT_RECURSIVE              = 0x8000;
+        public static final int AT_STATX_SYNC_AS_STAT = 0x0000;
+        public static final int AT_STATX_FORCE_SYNC   = 0x2000;
+        public static final int AT_STATX_DONT_SYNC    = 0x4000;
+        public static final int AT_STATX_SYNC_TYPE    = 0x6000;
+        public static final int AT_RECURSIVE          = 0x8000;
     }
 
-    // https://github.com/torvalds/linux/blob/f8f9c1f4d0c7a64600e2ca312dec824a0bc2f1da/include/uapi/linux/io_uring.h#L345
+    // https://github.com/torvalds/linux/blob/f8f9c1f4d0c7a64600e2ca312dec824a0bc2f1da/include/linux/splice.h#L17
     public static final class SpliceFlags {
         private SpliceFlags() {}
 
+        public static final int SPLICE_F_MOVE	  = 0x01;
+        public static final int SPLICE_F_NONBLOCK = 0x02;
+        public static final int SPLICE_F_MORE	  = 0x04;
+        public static final int SPLICE_F_GIFT	  = 0x08;
+        public static final int SPLICE_F_ALL      = SPLICE_F_MOVE | SPLICE_F_NONBLOCK | SPLICE_F_MORE | SPLICE_F_GIFT;
+
+        // https://github.com/torvalds/linux/blob/f8f9c1f4d0c7a64600e2ca312dec824a0bc2f1da/include/uapi/linux/io_uring.h#L345
         public static final int SPLICE_F_FD_IN_FIXED = 1 << 31;
     }
 
@@ -255,6 +262,30 @@ public final class NativeConstants {
     public static final class UnlinkAtFlags {
         private UnlinkAtFlags() {}
 
-        public static final int AT_REMOVEDIR  = 0x0200;
+        public static final int AT_REMOVEDIR = 0x0200;
+    }
+
+    // https://github.com/torvalds/linux/blob/f8f9c1f4d0c7a64600e2ca312dec824a0bc2f1da/include/uapi/linux/fadvise.h#L5
+    public static final class FadviseAdvice {
+        private FadviseAdvice() {}
+
+        public static final int POSIX_FADV_NORMAL     = 0;
+        public static final int POSIX_FADV_RANDOM     = 1;
+        public static final int POSIX_FADV_SEQUENTIAL = 2;
+        public static final int POSIX_FADV_WILLNEED   = 3;
+
+        // Ignoring s390-64
+        public static final int POSIX_FADV_DONTNEED   = 4;
+        public static final int POSIX_FADV_NOREUSE    = 5;
+    }
+
+    // https://github.com/torvalds/linux/blob/f8f9c1f4d0c7a64600e2ca312dec824a0bc2f1da/include/uapi/linux/fs.h#L397
+    public static final class SyncFileRangeFlags {
+        private SyncFileRangeFlags() {}
+
+        public static final int SYNC_FILE_RANGE_WAIT_BEFORE    = 1 << 0;
+        public static final int SYNC_FILE_RANGE_WRITE          = 1 << 1;
+        public static final int SYNC_FILE_RANGE_WAIT_AFTER     = 1 << 2;
+        public static final int SYNC_FILE_RANGE_WRITE_AND_WAIT = SYNC_FILE_RANGE_WAIT_BEFORE | SYNC_FILE_RANGE_WRITE | SYNC_FILE_RANGE_WAIT_AFTER;
     }
 }
