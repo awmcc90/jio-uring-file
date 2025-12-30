@@ -29,6 +29,7 @@ import java.util.function.Function;
 public class IoUringFileIoHandle implements IoUringIoHandle {
 
     private static final Logger logger = LoggerFactory.getLogger(IoUringFileIoHandle.class);
+    private static final long INVALID_ID = 0L;
 
     public final Path path;
     private final IoEventLoop ioEventLoop;
@@ -136,7 +137,9 @@ public class IoUringFileIoHandle implements IoUringIoHandle {
         try {
             ctx = contextRegistry.acquire(op);
             ctx.uringId = ioRegistration.submit(factory.apply(ctx));
-            if (ctx.uringId == -1L) throw new IOException("io_uring submission failed (ring full?)");
+            if (ctx.uringId == INVALID_ID) {
+                throw new IOException("io_uring submission failed (ring full?)");
+            }
             return ctx;
         } catch (Throwable t) {
             if (ctx != null) contextRegistry.release(ctx, t);

@@ -89,9 +89,9 @@ class AsyncOpRegistry  {
     private static final class OpIdPool {
         private static final int SIZE = 1 << 16;
 
-        private final short[] next = new short[56];
-        private final BitSet[] inUse = new BitSet[56];
-        private final int[] used = new int[56];
+        private final short[] next = new short[NativeConstants.IoUringOp._LAST];
+        private final BitSet[] inUse = new BitSet[NativeConstants.IoUringOp._LAST];
+        private final int[] used = new int[NativeConstants.IoUringOp._LAST];
 
         private boolean canAcquire(byte op) {
             return used[op] < SIZE;

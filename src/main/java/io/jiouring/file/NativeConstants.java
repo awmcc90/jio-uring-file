@@ -71,6 +71,10 @@ public final class NativeConstants {
         public static final byte IORING_OP_READV_FIXED         = 60;
         public static final byte IORING_OP_WRITEV_FIXED        = 61;
         public static final byte IORING_OP_PIPE                = 62;
+
+        // Doesn't map to IORING_OP_LAST. This is just a marker to reference in OpIdPool. And it's here so
+        // that I remember to update it when new ops are added.
+        public static final byte _LAST = 63;
     }
 
     // https://github.com/torvalds/linux/blob/f8f9c1f4d0c7a64600e2ca312dec824a0bc2f1da/include/uapi/asm-generic/fcntl.h#L18
